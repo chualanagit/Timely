@@ -10,6 +10,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@types/node": "^22.13.11"
+    "@types/node": "^22.13.11",
+    "body-parser": "^2.2.0",
+    "express": "^5.1.0",
+    "node-fetch": "^2.7.0",
+    "vapi": "^0.1.0"
   }
 }
