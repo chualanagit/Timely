@@ -55,7 +55,7 @@ p {
 
 .google-btn:hover {
     background-color: #f7fafc;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
 .google-btn img {
@@ -99,7 +99,8 @@ p {
     box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.5);
 }
 
-#search-button, #call-button {
+#search-button,
+#call-button {
     background: linear-gradient(90deg, #4F46E5, #818CF8);
     color: white;
     width: 100%;
@@ -113,12 +114,14 @@ p {
     margin-top: 10px;
 }
 
-#search-button:hover, #call-button:hover {
+#search-button:hover,
+#call-button:hover {
     box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4);
     transform: translateY(-2px);
 }
 
-#search-button:disabled, #call-button:disabled {
+#search-button:disabled,
+#call-button:disabled {
     background: #a0aec0;
     cursor: not-allowed;
     transform: none;
@@ -213,4 +216,31 @@ p {
     line-height: 1.7;
     color: #4a5568;
     text-align: left;
+}
+
+/* Table for extracted details */
+.details-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+    font-size: 14px;
+}
+
+.details-table tbody tr {
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.details-table tbody tr:last-child {
+    border-bottom: none;
+}
+
+.details-table td {
+    padding: 12px 8px;
+    text-align: left;
+}
+
+.details-table td:first-child {
+    font-weight: 500;
+    color: #555;
+    width: 40%;
 }

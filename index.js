@@ -173,8 +173,21 @@ async function getEmailDetails(gmail, messageId, userRequest) {
     const neededFields = await callLlamaAPI(neededInfoPrompt);
     const msg = await gmail.users.messages.get({ userId: 'me', id: messageId });
     const body = getEmailBody(msg.data.payload);
-    const extractionPrompt = `From the email body below, extract the following fields: ${neededFields}. Format the output as a clean list, like "Key: Value". If a piece of information isn't found, state "Not Found".\n\nEmail Body: """${body}"""`;
-    const extractedDetails = await callLlamaAPI(extractionPrompt, 250);
+    const extractionPrompt = `From the email body below, extract the following fields: ${neededFields}. Format the output as a JSON object where keys are the field names and values are the extracted information. If a piece of information isn't found, use "Not Found" as the value. Respond with ONLY the JSON object.\n\nEmail Body: """${body}"""`;
+    let extractedDetailsRaw = await callLlamaAPI(extractionPrompt, 250);
+
+    // Sanitize and parse the JSON
+    let extractedDetails;
+    try {
+        // Remove code block markers if present
+        extractedDetailsRaw = extractedDetailsRaw.replace(/```json|```/gi, '').trim();
+        extractedDetails = JSON.parse(extractedDetailsRaw);
+    } catch (e) {
+        console.error("Failed to parse JSON from LLM, returning raw text.", e);
+        // Fallback for cases where the LLM doesn't return valid JSON
+        extractedDetails = { "Raw Text": extractedDetailsRaw };
+    }
+
     const phonePrompt = `From the following text, extract any North American phone number you can find. Respond with only the number in E.164 format (e.g., +18005551234). If you don't find one, respond with "Not Found".\n\nText: """${body}"""`;
     let phoneNumberFromEmail = await callLlamaAPI(phonePrompt, 20);
     if (!phoneNumberFromEmail || !phoneNumberFromEmail.startsWith('+')) {

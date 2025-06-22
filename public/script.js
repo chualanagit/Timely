@@ -116,8 +116,29 @@ async function handleEmailChoice(messageId, userRequest) {
         });
         const data = await response.json();
         emailChoicesDiv.innerHTML = '';
-        extractedContextDiv.innerHTML = `<p>${data.context}</p>`;
-        currentContext = data.context;
+
+        // --- NEW: Table Generation ---
+        const table = document.createElement('table');
+        table.className = 'details-table';
+        const tbody = document.createElement('tbody');
+
+        for (const [key, value] of Object.entries(data.context)) {
+            const row = tbody.insertRow();
+            const cellKey = row.insertCell();
+            const cellValue = row.insertCell();
+            cellKey.textContent = key;
+            cellValue.textContent = value;
+        }
+
+        table.appendChild(tbody);
+        extractedContextDiv.innerHTML = ''; // Clear previous content
+        extractedContextDiv.appendChild(table);
+        // --- END: Table Generation ---
+
+        currentContext = Object.entries(data.context)
+                               .map(([key, value]) => `${key}: ${value}`)
+                               .join('\\n');
+
 
         if (data.phoneNumberFromEmail) {
             finalPhoneNumberInput.value = data.phoneNumberFromEmail;
