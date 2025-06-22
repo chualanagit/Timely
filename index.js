@@ -112,7 +112,7 @@ function getEmailBody(payload) {
 // --- Gmail Search Logic ---
 async function findInformationInGmail(authClient, vendor, userRequest) {
     const gmail = google.gmail({ version: 'v1', auth: authClient });
-    const searchQuery = `"${vendor}" in:inbox`;
+    const searchQuery = `${vendor} in:inbox`;
     console.log(`Searching Gmail for: ${searchQuery}`);
     const res = await gmail.users.messages.list({ userId: 'me', q: searchQuery, maxResults: 500 });
     const messages = res.data.messages;
@@ -231,7 +231,7 @@ app.post('/search-email', async (req, res) => {
     if (!req.session.tokens) return res.status(401).json({ error: 'User not authenticated.' });
     oauth2Client.setCredentials(req.session.tokens);
     try {
-        const vendorPrompt = `If I want to "${req.body.userRequest}", what search query would you use to find the most relevant information from my gmail. respond with only the search query.`;
+        const vendorPrompt = `From the user request "${req.body.userRequest}", what is the primary brand or company name? Respond with only the company name.`;
         const vendor = await callLlamaAPI(vendorPrompt, 6);
         const emailResult = await findInformationInGmail(oauth2Client, vendor, req.body.userRequest);
         res.status(200).json(emailResult);
