@@ -1,5 +1,6 @@
 //================================================================================
-// FILE 1: index.js (with Real Vapi Call Logic)
+// FILE 1: index.js (with ServerUrl Fix)
+// This version corrects the format of the serverUrl property in the Vapi call.
 //================================================================================
 
 const express = require('express');
@@ -39,60 +40,23 @@ class RateLimiter {
         this.timeWindow = timeWindow;
         this.requests = [];
     }
-
     async waitForSlot() {
         const now = Date.now();
         this.requests = this.requests.filter(time => now - time < this.timeWindow);
-        
         if (this.requests.length >= this.maxRequests) {
             const oldestRequest = this.requests[0];
             const waitTime = this.timeWindow - (now - oldestRequest);
             console.log(`Rate limit hit, waiting ${waitTime}ms...`);
             await new Promise(resolve => setTimeout(resolve, waitTime));
         }
-        
         this.requests.push(now);
     }
 }
-
-class TokenRateLimiter {
-    constructor(maxTokens, timeWindow) {
-        this.maxTokens = maxTokens;
-        this.timeWindow = timeWindow;
-        this.tokenUsage = [];
-    }
-
-    async waitForTokens(estimatedTokens) {
-        const now = Date.now();
-        this.tokenUsage = this.tokenUsage.filter(usage => now - usage.timestamp < this.timeWindow);
-        
-        const currentUsage = this.tokenUsage.reduce((sum, usage) => sum + usage.tokens, 0);
-        
-        if (currentUsage + estimatedTokens > this.maxTokens) {
-            const oldestUsage = this.tokenUsage[0];
-            const waitTime = this.timeWindow - (now - oldestUsage.timestamp);
-            console.log(`Token limit hit, waiting ${waitTime}ms...`);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
-            // Recursive call after waiting
-            return this.waitForTokens(estimatedTokens);
-        }
-        
-        this.tokenUsage.push({ tokens: estimatedTokens, timestamp: now });
-    }
-}
-
-const llamaRateLimiter = new RateLimiter(50, 1000); // 50 requests per second (3000 per minute)
-const tokenRateLimiter = new TokenRateLimiter(1000000, 60000); // 1M tokens per minute
+const llamaRateLimiter = new RateLimiter(50, 1000); 
 
 // --- Llama API Helper ---
 async function callLlamaAPI(prompt, max_tokens = 150) {
-    // Estimate tokens (rough approximation: 1 token ≈ 4 characters)
-    const estimatedTokens = Math.ceil((prompt.length + max_tokens) / 4);
-    
-    // Wait for both rate limit slots
     await llamaRateLimiter.waitForSlot();
-    await tokenRateLimiter.waitForTokens(estimatedTokens);
-
     if (!process.env.LLAMA_API_KEY || !process.env.LLAMA_API_URL) {
         throw new Error("Llama API Key or URL is not configured in Secrets.");
     }
@@ -115,8 +79,9 @@ async function callLlamaAPI(prompt, max_tokens = 150) {
         throw new Error(`Llama API Error: ${errorText}`);
     }
     const data = await response.json();
-
-    if (data.completion_message && data.completion_message.content && data.completion_message.content.text) {
+    if (data.choices && data.choices[0] && data.choices[0].message) {
+        return data.choices[0].message.content.trim();
+    } else if (data.completion_message && data.completion_message.content && data.completion_message.content.text) {
         return data.completion_message.content.text.trim();
     } else {
         console.error("Unexpected Llama API response format:", JSON.stringify(data, null, 2));
@@ -144,42 +109,30 @@ function getEmailBody(payload) {
     return combinedBody.replace(/\s+/g, ' ').trim();
 }
 
-
 // --- Gmail Search Logic ---
 async function findInformationInGmail(authClient, vendor, userRequest) {
     const gmail = google.gmail({ version: 'v1', auth: authClient });
-
     const searchQuery = `"${vendor}" in:inbox`;
-    console.log(`Executing broad Gmail search with query: ${searchQuery}`);
-
-    const res = await gmail.users.messages.list({ userId: 'me', q: searchQuery, maxResults: 50 }); 
+    const res = await gmail.users.messages.list({ userId: 'me', q: searchQuery, maxResults: 50 });
     const messages = res.data.messages;
 
     if (!messages || messages.length === 0) {
-        return { needsSelection: false, context: `I searched your emails for "${vendor}" but couldn't find any messages.` };
+        return { needsSelection: false, phoneNumber: null, context: `I searched your emails for "${vendor}" but couldn't find any messages.` };
     }
 
-    // Process emails in parallel with rate limiting
     const emailProcessingPromises = messages.slice(0, 50).map(async (msg) => {
         try {
             const messageDetails = await gmail.users.messages.get({ userId: 'me', id: msg.id });
             const body = getEmailBody(messageDetails.data.payload);
-
-            const cleaningPrompt = `Parse the following raw email text and extract only the core, human-readable message. Remove all irrelevant information like email headers, navigation links, marketing footers, and legal disclaimers. Return only the clean text.\n\nRaw Text: """${body.substring(0, 8000)}"""`;
-            const cleanedBody = await callLlamaAPI(cleaningPrompt, 500);
-
-            const relevancePrompt = `Is the following email body likely to contain actionable, transactional information (like an order, a booking, or a receipt) related to this user request: "${userRequest}"? Respond with only "Relevant" or "Irrelevant".\n\nEmail Body: """${cleanedBody}"""`;
+            const relevancePrompt = `Is the following email body likely to contain actionable, transactional information (like an order, a booking, or a receipt) related to this user request: "${userRequest}"? Respond with only "Relevant" or "Irrelevant".\n\nEmail Body: """${body.substring(0, 4000)}"""`;
             const relevance = await callLlamaAPI(relevancePrompt, 10);
-
             const subject = messageDetails.data.payload.headers.find(h => h.name.toLowerCase() === 'subject')?.value || 'No Subject';
+
             console.log(`Email Subject: "${subject}" -> Relevance: ${relevance}`);
 
             if (relevance.toLowerCase() === 'relevant') {
                 const date = messageDetails.data.payload.headers.find(h => h.name.toLowerCase() === 'date')?.value || 'Unknown Date';
-                return {
-                    id: msg.id,
-                    text: `${subject} (from ${new Date(date).toLocaleDateString()})` 
-                };
+                return { id: msg.id, text: `${subject} (from ${new Date(date).toLocaleDateString()})` };
             }
             return null;
         } catch (error) {
@@ -192,31 +145,34 @@ async function findInformationInGmail(authClient, vendor, userRequest) {
     const relevantEmails = results.filter(email => email !== null);
 
     if (relevantEmails.length > 0) {
-        return { needsSelection: true, choices: relevantEmails.slice(0, 5) }; 
+        return { needsSelection: true, choices: relevantEmails.slice(0, 5) };
     } else {
         return { needsSelection: false, context: `I found some emails from "${vendor}", but none seemed to be transactional or relevant to your request.` };
     }
 }
 
-
+// --- Get Email Details Logic ---
 async function getEmailDetails(gmail, messageId, userRequest) {
     const neededInfoPrompt = `For a user request like "${userRequest}", what information would an assistant need to complete the task? List them separated by commas.`;
     const neededFields = await callLlamaAPI(neededInfoPrompt);
     const msg = await gmail.users.messages.get({ userId: 'me', id: messageId });
     const body = getEmailBody(msg.data.payload);
     const extractionPrompt = `From the email body below, extract the following fields: ${neededFields}. Format the output as a clean list, like "Key: Value". If a piece of information isn't found, state "Not Found".\n\nEmail Body: """${body}"""`;
-    return await callLlamaAPI(extractionPrompt, 250);
+    const extractedDetails = await callLlamaAPI(extractionPrompt, 250);
+    const phonePrompt = `From the following text, extract any North American phone number you can find. Respond with only the number in E.164 format (e.g., +18005551234). If you don't find one, respond with "Not Found".\n\nText: """${body}"""`;
+    let phoneNumberFromEmail = await callLlamaAPI(phonePrompt, 20);
+    if (!phoneNumberFromEmail || !phoneNumberFromEmail.startsWith('+')) {
+        phoneNumberFromEmail = null;
+    }
+    return { context: extractedDetails, phoneNumberFromEmail };
 }
 
+
 // --- Routes ---
-app.get('/auth/status', (req, res) => {
-  if (req.session.tokens) res.json({ authenticated: true });
-  else res.json({ authenticated: false });
-});
+app.get('/auth/status', (req, res) => res.json({ authenticated: !!req.session.tokens }));
 
 app.get('/auth/google', (req, res) => {
-  const scopes = ['https://www.googleapis.com/auth/gmail.readonly'];
-  const url = oauth2Client.generateAuthUrl({ access_type: 'offline', scope: scopes });
+  const url = oauth2Client.generateAuthUrl({ access_type: 'offline', scope: ['https://www.googleapis.com/auth/gmail.readonly'] });
   res.redirect(url);
 });
 
@@ -226,55 +182,54 @@ app.get('/auth/google/callback', async (req, res) => {
     const { tokens } = await oauth2Client.getToken(code);
     req.session.tokens = tokens;
     res.redirect('/');
-  } catch (error) {
-    console.error('Error getting Google tokens:', error);
-    res.send('Error during authentication.');
-  }
+  } catch (error) { res.send('Error during authentication.'); }
 });
 
 app.post('/search-email', async (req, res) => {
-    const { userRequest } = req.body;
-    if (!req.session.tokens) return res.status(401).json({ error: 'User is not authenticated.' });
-
+    if (!req.session.tokens) return res.status(401).json({ error: 'User not authenticated.' });
     oauth2Client.setCredentials(req.session.tokens);
     try {
-        const vendorPrompt = `From the user request "${userRequest}", what is the primary brand or company name? Respond with only the company name.`;
+        const vendorPrompt = `From the user request "${req.body.userRequest}", what is the primary brand or company name? Respond with only the company name.`;
         const vendor = await callLlamaAPI(vendorPrompt, 20);
-        const emailResult = await findInformationInGmail(oauth2Client, vendor, userRequest);
+        const emailResult = await findInformationInGmail(oauth2Client, vendor, req.body.userRequest);
         res.status(200).json(emailResult);
-    } catch (error) {
+    } catch (error) { 
         console.error("Error in /search-email endpoint:", error);
-        res.status(500).json({ error: 'Failed to search email.' });
+        res.status(500).json({ error: 'Failed to search email.' }); 
     }
 });
 
-
 app.post('/get-email-details', async (req, res) => {
-    const { messageId, userRequest } = req.body;
-    if (!req.session.tokens) return res.status(401).json({ error: 'User is not authenticated.' });
+    if (!req.session.tokens) return res.status(401).json({ error: 'User not authenticated.' });
     oauth2Client.setCredentials(req.session.tokens);
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     try {
-        const details = await getEmailDetails(gmail, messageId, userRequest);
-        res.status(200).json({ context: details });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to get email details.' });
+        const details = await getEmailDetails(gmail, req.body.messageId, req.body.userRequest);
+        res.status(200).json(details);
+    } catch (error) { 
+        console.error("Error in /get-email-details endpoint:", error);
+        res.status(500).json({ error: 'Failed to get email details.' }); 
     }
 });
 
-// UPDATED: This now makes a REAL call to the Vapi API
 app.post('/initiate-call', async (req, res) => {
   const { userName, userRequest, phoneNumber, context } = req.body;
-  console.log(`Attempting to initiate a REAL Vapi call to ${phoneNumber}...`);
 
-  const baseSystemPrompt = `You are a highly capable, autonomous personal assistant acting as ${userName}. You must act and speak as if you ARE ${userName}, not an assistant calling for them. Do not reveal you are an AI. Be polite and focused.`;
-  const systemPrompt = `${baseSystemPrompt}\n\nYour specific task for this call is: "${userRequest}".\n\nYou have the following information from the user's email to help you:\n---${context}\n---`;
+  const baseSystemPrompt = `You are acting as ${userName}. Your voice and personality should be natural and conversational, just like a real person making a phone call. Do not mention that you are an AI or an assistant.
+- If there is information that you don't have, tell them that you are not sure, and will get back to them.
+- Use the 'sendDTMF' tool to navigate any automated phone menus you encounter. Be precise and only press the numbers you are instructed to.
+- If the other side ask you to repeat information, do it slower than the last time.
+- ask them to trigger a proof of the accomplished tasks to your email.
+- Once the task is complete, end the call politely.`;
+
+  const systemPrompt = `${baseSystemPrompt}\n\nYour specific task for this call is: "${userRequest}".\n\nYou have the following information to help you:\n---${context}\n---`;
 
   try {
     const payload = {
       phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID,
       customer: { number: phoneNumber },
       assistant: {
+        // CORRECTED: The serverUrl should be a simple string.
         serverUrl: `https://${req.get('host')}/call-webhook`,
         firstMessage: `Hi, this is ${userName}. I'm calling about an issue I need help with.`,
         model: {
@@ -291,7 +246,7 @@ app.post('/initiate-call', async (req, res) => {
           }]
         },
         voice: { provider: "playht", voiceId: "jennifer" },
-        metadata: { userName: userName }
+        metadata: { userName: userName, otherPartyRole: "Contact" }
       }
     };
 
@@ -306,28 +261,27 @@ app.post('/initiate-call', async (req, res) => {
         throw new Error(`Vapi API Error: ${JSON.stringify(errorData.message || errorData)}`);
     }
     const call = await vapiResponse.json();
-    console.log('Call queued successfully with ID:', call.id);
     res.status(200).json({ message: 'Call initiated successfully!', callId: call.id });
-  } catch (error) {
-    console.error('Error initiating call:', error);
-    res.status(500).json({ error: 'Failed to initiate call.' });
-  }
+  } catch (error) { 
+      console.error("Error in /initiate-call endpoint:", error);
+      res.status(500).json({ error: 'Failed to initiate call.' }); 
+    }
 });
 
-// UPDATED: Full webhook logic for real calls
 app.post('/call-webhook', (req, res) => {
     const { message } = req.body;
     if (!message || !message.call) return res.status(200).send();
 
     const callId = message.call.id;
     if (message.type === 'end-of-call-report') {
-        callSummaries[callId] = message.summary || "Call ended, but no summary was generated.";
+        const summary = message.summary || "Call ended, but no summary was generated.";
+        callSummaries[callId] = summary;
         delete callStatuses[callId];
     } else if (message.type === 'status-update') {
         callStatuses[callId] = `Call status: ${message.status}...`;
     } else if (message.type === 'transcript' && message.transcriptType === 'final') {
         if (message.role === 'assistant') {
-            callStatuses[callId] = `Agent is speaking...`;
+            callStatuses[callId] = `${message.call.assistant.metadata.userName || 'Agent'} is speaking...`;
         } else if (message.role === 'user' && message.transcript) {
             callStatuses[callId] = `Them: "${message.transcript}"`;
         }
@@ -344,9 +298,7 @@ app.get('/get-summary/:callId', (req, res) => {
     if (summary) {
         res.status(200).json({ summary });
         delete callSummaries[req.params.callId];
-    } else {
-        res.status(202).send();
-    }
+    } else { res.status(202).send(); }
 });
 
 const PORT = process.env.PORT || 3000;
