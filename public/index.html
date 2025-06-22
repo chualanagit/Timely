@@ -1,10 +1,5 @@
-### **FILE 2: The Main Webpage**
-This is the updated code for your **`public/index.html`** file, restoring the containers for live status and summary.
-
-
-```html
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -15,38 +10,42 @@ This is the updated code for your **`public/index.html`** file, restoring the co
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <h1>Your Timely Agent</h1>
-        <p>Connect your email, then describe the task you want the AI to perform.</p>
+    <div class="main-container">
+        <div class="header">
+            <h1>Your Timely Agent</h1>
+            <p>Connect your email, then describe the task you want the AI to perform.</p>
+        </div>
 
-        <a href="/auth/google" class="google-btn" target="_blank">
-            <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" alt="Google logo"/>
-            Connect Gmail
-        </a>
+        <div id="auth-section">
+            <a href="/auth/google" class="google-btn" target="_blank">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" alt="Google logo"/>
+                Connect Gmail
+            </a>
+        </div>
 
-        <div id="agent-form" class="hidden">
+        <div id="agent-form" class="hidden card">
+            <h2>Step 1: Provide Task Details</h2>
             <div class="input-group">
                 <label for="user-name">Your Name:</label>
                 <input type="text" id="user-name" placeholder="e.g., Cyndi Song">
             </div>
-
             <div class="input-group">
                 <label for="user-request">Your Request:</label>
                 <textarea id="user-request" rows="3" placeholder="e.g., Return my shirt from Banana Republic."></textarea>
             </div>
-
-            <button id="search-button">🔍 Search Email for Context</button>
+            <button id="search-button">🔍 Search Email & Find Context</button>
         </div>
 
-        <div id="results-container" class="hidden">
+        <div id="results-container" class="hidden card">
+            <h2>Step 2: Confirm Information</h2>
             <div class="output-container">
-                <h2>Phone Number to Call</h2>
+                <h3>Phone Number to Call</h3>
                  <div id="phone-number-entry" class="input-group">
-                    <input type="tel" id="phone-number-final" placeholder="+18005551234">
+                    <input type="tel" id="phone-number-final" placeholder="e.g., +18005551234">
                 </div>
             </div>
             <div class="output-container">
-                <h2>Information from Email</h2>
+                <h3>Information from Email</h3>
                 <div id="email-choices"></div>
                 <div id="extracted-context"></div>
                 <div id="go-back-container"></div> 
@@ -54,10 +53,13 @@ This is the updated code for your **`public/index.html`** file, restoring the co
             <button id="call-button" class="hidden">🚀 Confirm & Start Call</button>
         </div>
 
-        <div id="status-display"></div>
-        <button id="stop-call-button" class="hidden">🛑 Stop Call</button>
-
-        <div id="call-summary-container" class="output-container hidden">
+        <div id="call-progress-container" class="hidden card">
+             <h2>Step 3: Call in Progress</h2>
+             <div id="status-display"></div>
+             <button id="stop-call-button" class="hidden">🛑 Stop Call</button>
+        </div>
+       
+        <div id="call-summary-container" class="hidden card">
             <h2>Call Summary</h2>
             <div id="summary-box">
                 Your call summary will appear here after the call is complete...
