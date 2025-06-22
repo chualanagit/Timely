@@ -32,8 +32,67 @@ const oauth2Client = new google.auth.OAuth2(
   redirectUri
 );
 
+// --- Rate Limiter for Llama API ---
+class RateLimiter {
+    constructor(maxRequests, timeWindow) {
+        this.maxRequests = maxRequests;
+        this.timeWindow = timeWindow;
+        this.requests = [];
+    }
+
+    async waitForSlot() {
+        const now = Date.now();
+        this.requests = this.requests.filter(time => now - time < this.timeWindow);
+        
+        if (this.requests.length >= this.maxRequests) {
+            const oldestRequest = this.requests[0];
+            const waitTime = this.timeWindow - (now - oldestRequest);
+            console.log(`Rate limit hit, waiting ${waitTime}ms...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+        
+        this.requests.push(now);
+    }
+}
+
+class TokenRateLimiter {
+    constructor(maxTokens, timeWindow) {
+        this.maxTokens = maxTokens;
+        this.timeWindow = timeWindow;
+        this.tokenUsage = [];
+    }
+
+    async waitForTokens(estimatedTokens) {
+        const now = Date.now();
+        this.tokenUsage = this.tokenUsage.filter(usage => now - usage.timestamp < this.timeWindow);
+        
+        const currentUsage = this.tokenUsage.reduce((sum, usage) => sum + usage.tokens, 0);
+        
+        if (currentUsage + estimatedTokens > this.maxTokens) {
+            const oldestUsage = this.tokenUsage[0];
+            const waitTime = this.timeWindow - (now - oldestUsage.timestamp);
+            console.log(`Token limit hit, waiting ${waitTime}ms...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            // Recursive call after waiting
+            return this.waitForTokens(estimatedTokens);
+        }
+        
+        this.tokenUsage.push({ tokens: estimatedTokens, timestamp: now });
+    }
+}
+
+const llamaRateLimiter = new RateLimiter(50, 1000); // 50 requests per second (3000 per minute)
+const tokenRateLimiter = new TokenRateLimiter(1000000, 60000); // 1M tokens per minute
+
 // --- Llama API Helper ---
 async function callLlamaAPI(prompt, max_tokens = 150) {
+    // Estimate tokens (rough approximation: 1 token ≈ 4 characters)
+    const estimatedTokens = Math.ceil((prompt.length + max_tokens) / 4);
+    
+    // Wait for both rate limit slots
+    await llamaRateLimiter.waitForSlot();
+    await tokenRateLimiter.waitForTokens(estimatedTokens);
+
     if (!process.env.LLAMA_API_KEY || !process.env.LLAMA_API_URL) {
         throw new Error("Llama API Key or URL is not configured in Secrets.");
     }
@@ -100,28 +159,37 @@ async function findInformationInGmail(authClient, vendor, userRequest) {
         return { needsSelection: false, context: `I searched your emails for "${vendor}" but couldn't find any messages.` };
     }
 
-    const relevantEmails = [];
-    for (const msg of messages.slice(0, 50)) { 
-        const messageDetails = await gmail.users.messages.get({ userId: 'me', id: msg.id });
-        const body = getEmailBody(messageDetails.data.payload);
+    // Process emails in parallel with rate limiting
+    const emailProcessingPromises = messages.slice(0, 50).map(async (msg) => {
+        try {
+            const messageDetails = await gmail.users.messages.get({ userId: 'me', id: msg.id });
+            const body = getEmailBody(messageDetails.data.payload);
 
-        const cleaningPrompt = `Parse the following raw email text and extract only the core, human-readable message. Remove all irrelevant information like email headers, navigation links, marketing footers, and legal disclaimers. Return only the clean text.\n\nRaw Text: """${body.substring(0, 8000)}"""`;
-        const cleanedBody = await callLlamaAPI(cleaningPrompt, 500);
+            const cleaningPrompt = `Parse the following raw email text and extract only the core, human-readable message. Remove all irrelevant information like email headers, navigation links, marketing footers, and legal disclaimers. Return only the clean text.\n\nRaw Text: """${body.substring(0, 8000)}"""`;
+            const cleanedBody = await callLlamaAPI(cleaningPrompt, 500);
 
-        const relevancePrompt = `Is the following email body likely to contain actionable, transactional information (like an order, a booking, or a receipt) related to this user request: "${userRequest}"? Respond with only "Relevant" or "Irrelevant".\n\nEmail Body: """${cleanedBody}"""`;
-        const relevance = await callLlamaAPI(relevancePrompt, 10);
+            const relevancePrompt = `Is the following email body likely to contain actionable, transactional information (like an order, a booking, or a receipt) related to this user request: "${userRequest}"? Respond with only "Relevant" or "Irrelevant".\n\nEmail Body: """${cleanedBody}"""`;
+            const relevance = await callLlamaAPI(relevancePrompt, 10);
 
-        const subject = messageDetails.data.payload.headers.find(h => h.name.toLowerCase() === 'subject')?.value || 'No Subject';
-        console.log(`Email Subject: "${subject}" -> Relevance: ${relevance}`);
+            const subject = messageDetails.data.payload.headers.find(h => h.name.toLowerCase() === 'subject')?.value || 'No Subject';
+            console.log(`Email Subject: "${subject}" -> Relevance: ${relevance}`);
 
-        if (relevance.toLowerCase() === 'relevant') {
-            const date = messageDetails.data.payload.headers.find(h => h.name.toLowerCase() === 'date')?.value || 'Unknown Date';
-            relevantEmails.push({
-                id: msg.id,
-                text: `${subject} (from ${new Date(date).toLocaleDateString()})` 
-            });
+            if (relevance.toLowerCase() === 'relevant') {
+                const date = messageDetails.data.payload.headers.find(h => h.name.toLowerCase() === 'date')?.value || 'Unknown Date';
+                return {
+                    id: msg.id,
+                    text: `${subject} (from ${new Date(date).toLocaleDateString()})` 
+                };
+            }
+            return null;
+        } catch (error) {
+            console.error(`Error processing email ${msg.id}:`, error);
+            return null;
         }
-    }
+    });
+
+    const results = await Promise.all(emailProcessingPromises);
+    const relevantEmails = results.filter(email => email !== null);
 
     if (relevantEmails.length > 0) {
         return { needsSelection: true, choices: relevantEmails.slice(0, 5) }; 
