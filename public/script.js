@@ -1,5 +1,3 @@
-// FILE 4: public/script.js (Manual Phone Number & Simplified Flow)
-//================================================================================
 const googleBtn = document.querySelector('.google-btn');
 const agentForm = document.getElementById('agent-form');
 const userNameInput = document.getElementById('user-name');
@@ -7,16 +5,22 @@ const userRequestInput = document.getElementById('user-request');
 const searchButton = document.getElementById('search-button');
 
 const resultsContainer = document.getElementById('results-container');
+const phoneNumberDisplay = document.getElementById('phone-number-display');
+const phoneNumberEntry = document.getElementById('phone-number-entry');
+const phoneNumberManualInput = document.getElementById('phone-number-manual');
 const emailChoicesDiv = document.getElementById('email-choices');
 const extractedContextDiv = document.getElementById('extracted-context');
+const goBackContainer = document.getElementById('go-back-container');
 const finalCallSection = document.getElementById('final-call-section');
-const finalPhoneNumberInput = document.getElementById('phone-number-final');
 const callButton = document.getElementById('call-button');
 
 const statusDisplay = document.getElementById('status-display');
 const summaryBox = document.getElementById('summary-box');
+const callSummaryContainer = document.getElementById('call-summary-container');
 
 let currentContext = "";
+let currentEmailChoices = [];
+let pollingInterval = null;
 
 async function checkAuthStatus() {
     try {
@@ -42,7 +46,7 @@ searchButton.addEventListener('click', async () => {
     resetSearchUI();
     searchButton.disabled = true;
     searchButton.textContent = 'Searching...';
-    statusDisplay.textContent = 'Searching email...';
+    statusDisplay.textContent = 'Deriving company name...';
 
     try {
         const response = await fetch('/search-email', {
@@ -54,16 +58,19 @@ searchButton.addEventListener('click', async () => {
         resultsContainer.classList.remove('hidden');
         statusDisplay.textContent = '';
 
+        if (data.phoneNumber) {
+            phoneNumberDisplay.textContent = data.phoneNumber;
+            phoneNumberDisplay.classList.remove('hidden');
+            phoneNumberEntry.classList.add('hidden');
+        } else {
+            phoneNumberDisplay.textContent = 'Could not find a phone number. Please enter one.';
+            phoneNumberDisplay.classList.remove('hidden');
+            phoneNumberEntry.classList.remove('hidden');
+        }
+
         if (data.needsSelection) {
-            extractedContextDiv.classList.add('hidden');
-            emailChoicesDiv.classList.remove('hidden');
-            emailChoicesDiv.innerHTML = '<p>Please choose the most relevant email:</p>';
-            data.choices.forEach(choice => {
-                const button = document.createElement('button');
-                button.textContent = choice.text;
-                button.onclick = () => handleEmailChoice(choice.id, userRequest);
-                emailChoicesDiv.appendChild(button);
-            });
+            currentEmailChoices = data.choices;
+            displayEmailChoices(userRequest);
         } else {
             emailChoicesDiv.classList.add('hidden');
             extractedContextDiv.classList.remove('hidden');
@@ -76,12 +83,27 @@ searchButton.addEventListener('click', async () => {
         statusDisplay.textContent = `Error: ${error.message}`;
     } finally {
         searchButton.disabled = false;
-        searchButton.textContent = '🔍 Search Email for Context';
+        searchButton.textContent = '🔍 Search Email & Find Number';
     }
 });
 
+function displayEmailChoices(userRequest) {
+    extractedContextDiv.classList.add('hidden');
+    emailChoicesDiv.classList.remove('hidden');
+    finalCallSection.classList.add('hidden');
+    emailChoicesDiv.innerHTML = '<p>I found a few relevant emails. Please choose the correct one:</p>';
+    currentEmailChoices.forEach(choice => {
+        const button = document.createElement('button');
+        button.textContent = choice.text;
+        button.onclick = () => handleEmailChoice(choice.id, userRequest);
+        emailChoicesDiv.appendChild(button);
+    });
+}
+
 async function handleEmailChoice(messageId, userRequest) {
     emailChoicesDiv.innerHTML = '<p>Extracting details...</p>';
+    goBackContainer.innerHTML = ''; 
+
     try {
         const response = await fetch('/get-email-details', {
             method: 'POST',
@@ -93,6 +115,15 @@ async function handleEmailChoice(messageId, userRequest) {
         extractedContextDiv.classList.remove('hidden');
         extractedContextDiv.textContent = data.context;
         currentContext = data.context;
+
+        const goBackButton = document.createElement('button');
+        goBackButton.textContent = 'Go Back & Choose a Different Email';
+        goBackButton.onclick = () => {
+            goBackContainer.innerHTML = '';
+            displayEmailChoices(userRequest);
+        };
+        goBackContainer.appendChild(goBackButton);
+
         finalCallSection.classList.remove('hidden');
     } catch (error) {
         extractedContextDiv.textContent = "Error getting email details.";
@@ -100,32 +131,95 @@ async function handleEmailChoice(messageId, userRequest) {
 }
 
 callButton.addEventListener('click', async () => {
-    const phoneNumber = finalPhoneNumberInput.value;
-    if (!phoneNumber) {
-        statusDisplay.textContent = "Please enter a phone number to call.";
+    let phoneNumber = phoneNumberDisplay.textContent;
+    if (phoneNumberEntry.classList.contains('hidden') === false) {
+        phoneNumber = phoneNumberManualInput.value;
+    }
+
+    if (!phoneNumber || !phoneNumber.startsWith('+')) {
+        statusDisplay.textContent = "Please enter a valid phone number in E.164 format.";
         return;
     }
 
-    statusDisplay.textContent = `Starting call to ${phoneNumber}...`;
-    callButton.disabled = true;
+    const userName = userNameInput.value;
+    const userRequest = userRequestInput.value;
 
-    // Here you would integrate the real call logic
-    // For now, it's simulated.
-    setTimeout(() => {
-        statusDisplay.textContent = "Call simulation finished.";
-        summaryBox.textContent = "This is where the real summary would go.";
-        resetSearchUI();
-    }, 10000);
+    statusDisplay.textContent = `Initiating call to ${phoneNumber}...`;
+    callButton.disabled = true;
+    searchButton.disabled = true;
+
+    try {
+        const response = await fetch('/initiate-call', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userName, userRequest, phoneNumber, context: currentContext }),
+        });
+
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Failed to start call.');
+
+        const callId = data.callId;
+        callSummaryContainer.classList.remove('hidden');
+        summaryBox.textContent = 'Call is in progress...';
+
+        // Start polling for status and summary
+        pollingInterval = setInterval(() => pollCallStatus(callId), 3000);
+
+    } catch (error) {
+        statusDisplay.textContent = `Error: ${error.message}`;
+        callButton.disabled = false;
+        searchButton.disabled = false;
+    }
 });
 
+
+async function pollCallStatus(callId) {
+    try {
+        const statusRes = await fetch(`/get-status/${callId}`);
+        if (statusRes.ok && statusRes.status !== 204) {
+            const statusData = await statusRes.json();
+            if(statusData.status) {
+                statusDisplay.textContent = statusData.status;
+            }
+        }
+
+        const summaryRes = await fetch(`/get-summary/${callId}`);
+        if (summaryRes.ok && summaryRes.status !== 202) {
+            const summaryData = await summaryRes.json();
+            summaryBox.textContent = summaryData.summary;
+            statusDisplay.textContent = "Call complete!";
+            resetUI();
+        }
+
+    } catch (error) {
+        console.error("Polling error:", error);
+        statusDisplay.textContent = "Error fetching updates.";
+        resetUI();
+    }
+}
+
+
+function resetUI() {
+    searchButton.disabled = false;
+    callButton.disabled = false;
+    resultsContainer.classList.add('hidden');
+    callSummaryContainer.classList.add('hidden');
+    resetSearchUI();
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+    }
+}
 
 function resetSearchUI() {
     resultsContainer.classList.add('hidden');
     finalCallSection.classList.add('hidden');
     emailChoicesDiv.innerHTML = '';
     extractedContextDiv.textContent = '';
-    finalPhoneNumberInput.value = '';
+    goBackContainer.innerHTML = '';
+    phoneNumberManualInput.value = '';
     currentContext = "";
+    currentEmailChoices = [];
 }
 
 document.addEventListener('DOMContentLoaded', checkAuthStatus);

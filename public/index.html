@@ -1,5 +1,3 @@
-// FILE 2: public/index.html (Manual Phone Number & Simpler UI)
-//================================================================================
 <!DOCTYPE html>
 <html>
 <head>
@@ -32,32 +30,34 @@
                 <textarea id="user-request" rows="3" placeholder="e.g., Return my shirt from Banana Republic."></textarea>
             </div>
 
-            <button id="search-button">🔍 Search Email for Context</button>
+            <button id="search-button">🔍 Search Email & Find Number</button>
         </div>
 
         <div id="results-container" class="hidden">
+             <div class="output-container">
+                <h2>Phone Number to Call</h2>
+                 <div id="phone-number-display"></div>
+                 <div id="phone-number-entry" class="input-group hidden">
+                    <input type="tel" id="phone-number-manual" placeholder="+18005551234">
+                </div>
+            </div>
             <div class="output-container">
                 <h2>Information from Email</h2>
                 <div id="email-choices"></div>
                 <div id="extracted-context"></div>
+                <div id="go-back-container"></div> 
             </div>
-
-            <!-- Manual Phone Number entry is now part of the final step -->
             <div id="final-call-section" class="hidden">
-                 <div class="input-group">
-                    <label for="phone-number-final">Phone Number to Call (E.164):</label>
-                    <input type="tel" id="phone-number-final" placeholder="+18005551234">
-                </div>
                 <button id="call-button">🚀 Confirm & Start Call</button>
             </div>
         </div>
 
         <div id="status-display"></div>
 
-        <div class="output-container">
+        <div id="call-summary-container" class="output-container hidden">
             <h2>Call Summary</h2>
             <div id="summary-box">
-                Connect your Gmail to begin...
+                Your call summary will appear here after the call is complete...
             </div>
         </div>
     </div>
