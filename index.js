@@ -67,7 +67,7 @@ async function callLlamaAPI(prompt, max_tokens = 150) {
             'Authorization': `Bearer ${process.env.LLAMA_API_KEY}`
         },
         body: JSON.stringify({
-            model: "Llama-3.3-70B-Instruct",
+            model: "Llama-4-Maverick-17B-128E-Instruct-FP8",
             messages: [{ role: "system", content: prompt }],
             temperature: 0.1,
             max_tokens: max_tokens,
@@ -124,7 +124,7 @@ async function findInformationInGmail(authClient, vendor, userRequest) {
         try {
             const messageDetails = await gmail.users.messages.get({ userId: 'me', id: msg.id });
             const body = getEmailBody(messageDetails.data.payload);
-            const relevancePrompt = `Is the following email body likely to contain actionable, transactional information (like an order, a booking, or a receipt) related to this user request: "${userRequest}"? Respond with only "Relevant" or "Irrelevant".\n\nEmail Body: """${body.substring(0, 4000)}"""`;
+            const relevancePrompt = `Is the following email body likely to contain actionable, transactional information (like an order, a booking, or a receipt) related to this user request: "${userRequest}"? Respond with only "Relevant" or "Irrelevant".\n\nEmail Body: """${body.substring(0, 8000)}"""`;
             const relevance = await callLlamaAPI(relevancePrompt, 10);
             const subject = messageDetails.data.payload.headers.find(h => h.name.toLowerCase() === 'subject')?.value || 'No Subject';
 
