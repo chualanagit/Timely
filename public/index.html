@@ -1,3 +1,8 @@
+### **FILE 2: The Main Webpage**
+This is the updated code for your **`public/index.html`** file, restoring the containers for live status and summary.
+
+
+```html
 <!DOCTYPE html>
 <html>
 <head>
@@ -30,15 +35,14 @@
                 <textarea id="user-request" rows="3" placeholder="e.g., Return my shirt from Banana Republic."></textarea>
             </div>
 
-            <button id="search-button">🔍 Search Email & Find Number</button>
+            <button id="search-button">🔍 Search Email for Context</button>
         </div>
 
         <div id="results-container" class="hidden">
-             <div class="output-container">
+            <div class="output-container">
                 <h2>Phone Number to Call</h2>
-                 <div id="phone-number-display"></div>
-                 <div id="phone-number-entry" class="input-group hidden">
-                    <input type="tel" id="phone-number-manual" placeholder="+18005551234">
+                 <div id="phone-number-entry" class="input-group">
+                    <input type="tel" id="phone-number-final" placeholder="+18005551234">
                 </div>
             </div>
             <div class="output-container">
@@ -47,12 +51,11 @@
                 <div id="extracted-context"></div>
                 <div id="go-back-container"></div> 
             </div>
-            <div id="final-call-section" class="hidden">
-                <button id="call-button">🚀 Confirm & Start Call</button>
-            </div>
+            <button id="call-button" class="hidden">🚀 Confirm & Start Call</button>
         </div>
 
         <div id="status-display"></div>
+        <button id="stop-call-button" class="hidden">🛑 Stop Call</button>
 
         <div id="call-summary-container" class="output-container hidden">
             <h2>Call Summary</h2>

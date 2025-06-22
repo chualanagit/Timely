@@ -1,6 +1,6 @@
 //================================================================================
-// FILE 1: index.js (with ServerUrl Fix)
-// This version corrects the format of the serverUrl property in the Vapi call.
+// FILE 1: index.js (with serverUrl Fix)
+// This version corrects the format of the serverUrl in the Vapi API call.
 //================================================================================
 
 const express = require('express');
@@ -67,7 +67,7 @@ async function callLlamaAPI(prompt, max_tokens = 150) {
             'Authorization': `Bearer ${process.env.LLAMA_API_KEY}`
         },
         body: JSON.stringify({
-            model: "Llama-4-Maverick-17B-128E-Instruct-FP8",
+            model: "Llama-3.3-70B-Instruct",
             messages: [{ role: "system", content: prompt }],
             temperature: 0.1,
             max_tokens: max_tokens,
@@ -113,7 +113,8 @@ function getEmailBody(payload) {
 async function findInformationInGmail(authClient, vendor, userRequest) {
     const gmail = google.gmail({ version: 'v1', auth: authClient });
     const searchQuery = `"${vendor}" in:inbox`;
-    const res = await gmail.users.messages.list({ userId: 'me', q: searchQuery, maxResults: 50 });
+    console.log(`Searching Gmail for: ${searchQuery}`);
+    const res = await gmail.users.messages.list({ userId: 'me', q: searchQuery, maxResults: 500 });
     const messages = res.data.messages;
 
     if (!messages || messages.length === 0) {
@@ -124,9 +125,24 @@ async function findInformationInGmail(authClient, vendor, userRequest) {
         try {
             const messageDetails = await gmail.users.messages.get({ userId: 'me', id: msg.id });
             const body = getEmailBody(messageDetails.data.payload);
-            const relevancePrompt = `Is the following email body likely to contain actionable, transactional information (like an order, a booking, or a receipt) related to this user request: "${userRequest}"? Respond with only "Relevant" or "Irrelevant".\n\nEmail Body: """${body.substring(0, 8000)}"""`;
-            const relevance = await callLlamaAPI(relevancePrompt, 10);
             const subject = messageDetails.data.payload.headers.find(h => h.name.toLowerCase() === 'subject')?.value || 'No Subject';
+
+            const relevancePrompt = `You are an expert relevance detection assistant. Your task is to determine if an email is a transactional message (like a receipt, order confirmation, shipping notice, or appointment detail) or if it is a promotional/marketing email.
+
+Analyze the email based on the user's request, the email subject, and the email body.
+
+User Request: "${userRequest}"
+Email Subject: "${subject}"
+Email Body (first 8000 chars):
+"""
+${body.substring(0, 8000)}
+"""
+
+Is this email directly relevant and actionable for the user's request?
+- If the email is a transactional receipt, confirmation, or contains specific details like an Order ID, Reservation Number, or appointment time that relates to the request, respond with only the word: "Relevant".
+- If the email is primarily a newsletter, an advertisement, a sale announcement, or any other form of marketing, respond with only the word: "Irrelevant".`;
+
+            const relevance = await callLlamaAPI(relevancePrompt, 10);
 
             console.log(`Email Subject: "${subject}" -> Relevance: ${relevance}`);
 
@@ -167,8 +183,34 @@ async function getEmailDetails(gmail, messageId, userRequest) {
     return { context: extractedDetails, phoneNumberFromEmail };
 }
 
+// --- Structured Summary Generation ---
+async function generateDetailedSummary(transcript, userName, otherPartyRole) {
+    if (!transcript) return "Call ended, but no transcript was available to generate a summary.";
 
-// --- Routes ---
+    const summaryPrompt = `
+      Analyze the following call transcript. The agent, acting as "${userName}", called a business. The other party is the "${otherPartyRole}".
+
+      Your task is to provide a concise, easily digestible summary with three distinct sections using Markdown for formatting:
+
+      1.  **Summary:** Write a short, narrative summary of the call. Describe what ${userName} wanted, what the ${otherPartyRole} said, and the general flow of the conversation.
+      2.  **Result:** State the final, definitive outcome of the call (e.g., "Return successfully initiated," "Appointment booked for Friday at 3 PM," "Could not resolve issue").
+      3.  **Follow-up Needed:** List any actions that need to be taken or information that is still required. If no follow-up is needed, state "None."
+
+      Transcript:
+      """
+      ${transcript}
+      """
+    `;
+    return await callLlamaAPI(summaryPrompt, 300);
+}
+
+// --- Derive Other Party Role ---
+async function deriveOtherPartyRole(userRequest) {
+    const rolePrompt = `Based on the user's request, what is the likely job title or role of the person the user wants to call? Respond with only the job title. Examples: "Customer Service Rep", "Receptionist", "Pharmacist".\n\nUser Request: "${userRequest}"`;
+    return await callLlamaAPI(rolePrompt, 20);
+}
+
+// --- Express Routes ---
 app.get('/auth/status', (req, res) => res.json({ authenticated: !!req.session.tokens }));
 
 app.get('/auth/google', (req, res) => {
@@ -189,8 +231,8 @@ app.post('/search-email', async (req, res) => {
     if (!req.session.tokens) return res.status(401).json({ error: 'User not authenticated.' });
     oauth2Client.setCredentials(req.session.tokens);
     try {
-        const vendorPrompt = `From the user request "${req.body.userRequest}", what is the primary brand or company name? Respond with only the company name.`;
-        const vendor = await callLlamaAPI(vendorPrompt, 20);
+        const vendorPrompt = `If I want to "${req.body.userRequest}", what search query would you use to find the most relevant information from my gmail. respond with only the search query.`;
+        const vendor = await callLlamaAPI(vendorPrompt, 6);
         const emailResult = await findInformationInGmail(oauth2Client, vendor, req.body.userRequest);
         res.status(200).json(emailResult);
     } catch (error) { 
@@ -216,20 +258,21 @@ app.post('/initiate-call', async (req, res) => {
   const { userName, userRequest, phoneNumber, context } = req.body;
 
   const baseSystemPrompt = `You are acting as ${userName}. Your voice and personality should be natural and conversational, just like a real person making a phone call. Do not mention that you are an AI or an assistant.
-- If there is information that you don't have, tell them that you are not sure, and will get back to them.
+- If you are asked for sensitive information you do not have (like a full credit card number or a password), politely state that you do not have it in front of you for security reasons.
 - Use the 'sendDTMF' tool to navigate any automated phone menus you encounter. Be precise and only press the numbers you are instructed to.
-- If the other side ask you to repeat information, do it slower than the last time.
+- If the other side asks you to repeat information, do it slower than the last time.
 - ask them to trigger a proof of the accomplished tasks to your email.
 - Once the task is complete, end the call politely.`;
 
   const systemPrompt = `${baseSystemPrompt}\n\nYour specific task for this call is: "${userRequest}".\n\nYou have the following information to help you:\n---${context}\n---`;
 
   try {
+    const otherPartyRole = await deriveOtherPartyRole(userRequest);
     const payload = {
       phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID,
       customer: { number: phoneNumber },
       assistant: {
-        // CORRECTED: The serverUrl should be a simple string.
+        // CORRECTED: serverUrl is now a simple string, as the Vapi API expects.
         serverUrl: `https://${req.get('host')}/call-webhook`,
         firstMessage: `Hi, this is ${userName}. I'm calling about an issue I need help with.`,
         model: {
@@ -246,7 +289,7 @@ app.post('/initiate-call', async (req, res) => {
           }]
         },
         voice: { provider: "playht", voiceId: "jennifer" },
-        metadata: { userName: userName, otherPartyRole: "Contact" }
+        metadata: { userName: userName, otherPartyRole: otherPartyRole }
       }
     };
 
@@ -268,13 +311,33 @@ app.post('/initiate-call', async (req, res) => {
     }
 });
 
-app.post('/call-webhook', (req, res) => {
+app.post('/stop-call', async (req, res) => {
+    const { callId } = req.body;
+    if (!callId) return res.status(400).json({ error: 'callId is required.' });
+    try {
+        await fetch(`https://api.vapi.ai/call/${callId}/stop`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${process.env.VAPI_PRIVATE_KEY}` }
+        });
+        res.status(200).json({ message: 'Call stop request sent successfully.' });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to stop call.' });
+    }
+});
+
+app.post('/call-webhook', async (req, res) => {
     const { message } = req.body;
     if (!message || !message.call) return res.status(200).send();
 
     const callId = message.call.id;
     if (message.type === 'end-of-call-report') {
-        const summary = message.summary || "Call ended, but no summary was generated.";
+        const transcript = message.transcript || "No transcript available.";
+        const userName = message.call.assistant.metadata.userName || 'The User';
+        const otherPartyRole = message.call.assistant.metadata.otherPartyRole || 'The Other Party';
+
+        console.log(`Call ended: ${callId}. Generating structured summary...`);
+        const summary = await generateDetailedSummary(transcript, userName, otherPartyRole);
+
         callSummaries[callId] = summary;
         delete callStatuses[callId];
     } else if (message.type === 'status-update') {

@@ -1,3 +1,8 @@
+//================================================================================
+// FILE 4: public/script.js (with Status & Summary Restored)
+// This version restores the full polling logic for live updates.
+//================================================================================
+
 const googleBtn = document.querySelector('.google-btn');
 const agentForm = document.getElementById('agent-form');
 const userNameInput = document.getElementById('user-name');
@@ -5,22 +10,24 @@ const userRequestInput = document.getElementById('user-request');
 const searchButton = document.getElementById('search-button');
 
 const resultsContainer = document.getElementById('results-container');
-const phoneNumberDisplay = document.getElementById('phone-number-display');
 const phoneNumberEntry = document.getElementById('phone-number-entry');
-const phoneNumberManualInput = document.getElementById('phone-number-manual');
+const finalPhoneNumberInput = document.getElementById('phone-number-final'); 
+
 const emailChoicesDiv = document.getElementById('email-choices');
 const extractedContextDiv = document.getElementById('extracted-context');
 const goBackContainer = document.getElementById('go-back-container');
-const finalCallSection = document.getElementById('final-call-section');
 const callButton = document.getElementById('call-button');
+const stopCallButton = document.getElementById('stop-call-button');
 
 const statusDisplay = document.getElementById('status-display');
-const summaryBox = document.getElementById('summary-box');
 const callSummaryContainer = document.getElementById('call-summary-container');
+const summaryBox = document.getElementById('summary-box');
 
 let currentContext = "";
 let currentEmailChoices = [];
-let pollingInterval = null;
+let currentCallId = null;
+let statusPollingInterval = null;
+let summaryPollingInterval = null;
 
 async function checkAuthStatus() {
     try {
@@ -36,7 +43,8 @@ async function checkAuthStatus() {
     }
 }
 
-searchButton.addEventListener('click', async () => {
+searchButton.addEventListener('click', async function handleSearchClick() {
+    console.log("Search button clicked.");
     const userRequest = userRequestInput.value;
     if (!userRequest) {
         statusDisplay.textContent = 'Please enter your request.';
@@ -54,45 +62,41 @@ searchButton.addEventListener('click', async () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userRequest }),
         });
+
+        statusDisplay.textContent = 'Processing search results...';
         const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to search email.');
+        }
+
         resultsContainer.classList.remove('hidden');
         statusDisplay.textContent = '';
 
-        if (data.phoneNumber) {
-            phoneNumberDisplay.textContent = data.phoneNumber;
-            phoneNumberDisplay.classList.remove('hidden');
-            phoneNumberEntry.classList.add('hidden');
-        } else {
-            phoneNumberDisplay.textContent = 'Could not find a phone number. Please enter one.';
-            phoneNumberDisplay.classList.remove('hidden');
-            phoneNumberEntry.classList.remove('hidden');
-        }
+        phoneNumberEntry.classList.remove('hidden');
 
         if (data.needsSelection) {
             currentEmailChoices = data.choices;
-            displayEmailChoices(userRequest);
+            displayEmailChoices(data.choices, userRequest);
         } else {
-            emailChoicesDiv.classList.add('hidden');
-            extractedContextDiv.classList.remove('hidden');
-            extractedContextDiv.textContent = data.context;
+            emailChoicesDiv.innerHTML = `<p>${data.context}</p>`;
             currentContext = data.context;
-            finalCallSection.classList.remove('hidden');
+            callButton.classList.remove('hidden');
         }
 
     } catch (error) {
+        console.error("Search error:", error);
         statusDisplay.textContent = `Error: ${error.message}`;
     } finally {
+        console.log("Search process finished, button re-enabled.");
         searchButton.disabled = false;
-        searchButton.textContent = '🔍 Search Email & Find Number';
+        searchButton.textContent = '🔍 Search Email for Context';
     }
 });
 
-function displayEmailChoices(userRequest) {
-    extractedContextDiv.classList.add('hidden');
-    emailChoicesDiv.classList.remove('hidden');
-    finalCallSection.classList.add('hidden');
+function displayEmailChoices(choices, userRequest) {
     emailChoicesDiv.innerHTML = '<p>I found a few relevant emails. Please choose the correct one:</p>';
-    currentEmailChoices.forEach(choice => {
+    choices.forEach(choice => {
         const button = document.createElement('button');
         button.textContent = choice.text;
         button.onclick = () => handleEmailChoice(choice.id, userRequest);
@@ -111,115 +115,145 @@ async function handleEmailChoice(messageId, userRequest) {
             body: JSON.stringify({ messageId, userRequest }),
         });
         const data = await response.json();
-        emailChoicesDiv.classList.add('hidden');
-        extractedContextDiv.classList.remove('hidden');
-        extractedContextDiv.textContent = data.context;
+        emailChoicesDiv.innerHTML = '';
+        extractedContextDiv.innerHTML = `<p>${data.context}</p>`;
         currentContext = data.context;
 
+        if (data.phoneNumberFromEmail) {
+            finalPhoneNumberInput.value = data.phoneNumberFromEmail;
+        } else {
+             finalPhoneNumberInput.placeholder = 'No number in email. Please enter.';
+        }
+
         const goBackButton = document.createElement('button');
-        goBackButton.textContent = 'Go Back & Choose a Different Email';
+        goBackButton.textContent = '← Go Back & Choose Again';
         goBackButton.onclick = () => {
             goBackContainer.innerHTML = '';
-            displayEmailChoices(userRequest);
+            extractedContextDiv.innerHTML = '';
+            displayEmailChoices(currentEmailChoices, userRequest);
         };
         goBackContainer.appendChild(goBackButton);
 
-        finalCallSection.classList.remove('hidden');
+        callButton.classList.remove('hidden');
     } catch (error) {
-        extractedContextDiv.textContent = "Error getting email details.";
+        extractedContextDiv.innerHTML = "<p>Error getting email details.</p>";
     }
 }
 
 callButton.addEventListener('click', async () => {
-    let phoneNumber = phoneNumberDisplay.textContent;
-    if (phoneNumberEntry.classList.contains('hidden') === false) {
-        phoneNumber = phoneNumberManualInput.value;
-    }
+    const userName = userNameInput.value;
+    const userRequest = userRequestInput.value;
+    const phoneNumber = finalPhoneNumberInput.value;
+    const context = currentContext;
 
-    if (!phoneNumber || !phoneNumber.startsWith('+')) {
-        statusDisplay.textContent = "Please enter a valid phone number in E.164 format.";
+    if (!phoneNumber) {
+        statusDisplay.textContent = "Please enter a phone number.";
         return;
     }
 
-    const userName = userNameInput.value;
-    const userRequest = userRequestInput.value;
-
-    statusDisplay.textContent = `Initiating call to ${phoneNumber}...`;
+    resetCallUI();
     callButton.disabled = true;
-    searchButton.disabled = true;
+    callButton.classList.add('hidden');
+    goBackContainer.innerHTML = ''; 
+    stopCallButton.classList.remove('hidden');
 
     try {
         const response = await fetch('/initiate-call', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userName, userRequest, phoneNumber, context: currentContext }),
+            body: JSON.stringify({ userName, userRequest, phoneNumber, context }),
         });
-
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Failed to start call.');
 
-        const callId = data.callId;
+        currentCallId = data.callId;
+        statusDisplay.textContent = 'Call initiated...';
         callSummaryContainer.classList.remove('hidden');
-        summaryBox.textContent = 'Call is in progress...';
 
-        // Start polling for status and summary
-        pollingInterval = setInterval(() => pollCallStatus(callId), 3000);
+        statusPollingInterval = setInterval(getStatus, 3000);
+        summaryPollingInterval = setInterval(getSummary, 5000);
 
     } catch (error) {
         statusDisplay.textContent = `Error: ${error.message}`;
-        callButton.disabled = false;
-        searchButton.disabled = false;
+        resetCallUI(true);
+    }
+});
+
+stopCallButton.addEventListener('click', async () => {
+    if (!currentCallId) return;
+    stopCallButton.disabled = true;
+    stopCallButton.textContent = "Stopping...";
+    try {
+        await fetch('/stop-call', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ callId: currentCallId }),
+        });
+    } catch (error) {
+        statusDisplay.textContent = "Error trying to stop the call.";
+        stopCallButton.disabled = false;
+        stopCallButton.textContent = "🛑 Stop Call";
     }
 });
 
 
-async function pollCallStatus(callId) {
+async function getStatus() {
+    if (!currentCallId) return;
     try {
-        const statusRes = await fetch(`/get-status/${callId}`);
-        if (statusRes.ok && statusRes.status !== 204) {
-            const statusData = await statusRes.json();
-            if(statusData.status) {
-                statusDisplay.textContent = statusData.status;
+        const response = await fetch(`/get-status/${currentCallId}`);
+        if (response.status === 200) {
+            const data = await response.json();
+            if (data.status) {
+                statusDisplay.textContent = data.status;
             }
         }
-
-        const summaryRes = await fetch(`/get-summary/${callId}`);
-        if (summaryRes.ok && summaryRes.status !== 202) {
-            const summaryData = await summaryRes.json();
-            summaryBox.textContent = summaryData.summary;
-            statusDisplay.textContent = "Call complete!";
-            resetUI();
-        }
-
     } catch (error) {
-        console.error("Polling error:", error);
-        statusDisplay.textContent = "Error fetching updates.";
-        resetUI();
+        console.error('Status polling error:', error);
     }
 }
 
-
-function resetUI() {
-    searchButton.disabled = false;
-    callButton.disabled = false;
-    resultsContainer.classList.add('hidden');
-    callSummaryContainer.classList.add('hidden');
-    resetSearchUI();
-    if (pollingInterval) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
+async function getSummary() {
+    if (!currentCallId) return;
+    try {
+        const response = await fetch(`/get-summary/${currentCallId}`);
+        if (response.status === 200) {
+            const data = await response.json();
+            summaryBox.innerHTML = data.summary.replace(/\n/g, '<br>'); // Format summary
+            resetCallUI(true);
+        }
+    } catch (error) {
+        console.error('Summary polling error:', error);
+        resetCallUI(true);
     }
 }
 
 function resetSearchUI() {
     resultsContainer.classList.add('hidden');
-    finalCallSection.classList.add('hidden');
+    callButton.classList.add('hidden');
     emailChoicesDiv.innerHTML = '';
-    extractedContextDiv.textContent = '';
+    extractedContextDiv.innerHTML = '';
     goBackContainer.innerHTML = '';
-    phoneNumberManualInput.value = '';
+    phoneNumberEntry.classList.add('hidden');
+    if(finalPhoneNumberInput) finalPhoneNumberInput.value = '';
     currentContext = "";
     currentEmailChoices = [];
+}
+
+function resetCallUI(isCallFinished) {
+    if (statusPollingInterval) clearInterval(statusPollingInterval);
+    if (summaryPollingInterval) clearInterval(summaryPollingInterval);
+    statusPollingInterval = null;
+    summaryPollingInterval = null;
+
+    stopCallButton.classList.add('hidden');
+    stopCallButton.disabled = false;
+    stopCallButton.textContent = "🛑 Stop Call";
+
+    if(isCallFinished) {
+        callButton.disabled = false;
+        callButton.textContent = "🚀 Confirm & Start Call";
+        currentCallId = null;
+    }
 }
 
 document.addEventListener('DOMContentLoaded', checkAuthStatus);
