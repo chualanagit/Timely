@@ -1,106 +1,131 @@
-// FILE 4: public/script.js (Updated)
+// FILE 4: public/script.js (Manual Phone Number & Simplified Flow)
 //================================================================================
-
-const userNameInput = document.getElementById('user-name'); 
+const googleBtn = document.querySelector('.google-btn');
+const agentForm = document.getElementById('agent-form');
+const userNameInput = document.getElementById('user-name');
 const userRequestInput = document.getElementById('user-request');
-const phoneNumberInput = document.getElementById('phone-number');
+const searchButton = document.getElementById('search-button');
+
+const resultsContainer = document.getElementById('results-container');
+const emailChoicesDiv = document.getElementById('email-choices');
+const extractedContextDiv = document.getElementById('extracted-context');
+const finalCallSection = document.getElementById('final-call-section');
+const finalPhoneNumberInput = document.getElementById('phone-number-final');
 const callButton = document.getElementById('call-button');
-const cancelButton = document.getElementById('cancel-button');
+
 const statusDisplay = document.getElementById('status-display');
 const summaryBox = document.getElementById('summary-box');
 
-let currentCallId = null;
-let pollingInterval = null;
+let currentContext = "";
 
-function resetUI() {
-    callButton.disabled = false;
-    callButton.textContent = '🚀 Create Agent & Start Call';
-    cancelButton.classList.add('hidden');
-    callButton.classList.remove('hidden');
-    statusDisplay.textContent = '';
-    if (pollingInterval) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
+async function checkAuthStatus() {
+    try {
+        const response = await fetch('/auth/status');
+        const data = await response.json();
+        if (data.authenticated) {
+            googleBtn.classList.add('hidden');
+            agentForm.classList.remove('hidden');
+            summaryBox.textContent = 'Gmail connected! Please enter your task details.';
+        }
+    } catch (error) {
+        console.error("Error checking auth status:", error);
+    }
+}
+
+searchButton.addEventListener('click', async () => {
+    const userRequest = userRequestInput.value;
+    if (!userRequest) {
+        statusDisplay.textContent = 'Please enter your request.';
+        return;
+    }
+
+    resetSearchUI();
+    searchButton.disabled = true;
+    searchButton.textContent = 'Searching...';
+    statusDisplay.textContent = 'Searching email...';
+
+    try {
+        const response = await fetch('/search-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userRequest }),
+        });
+        const data = await response.json();
+        resultsContainer.classList.remove('hidden');
+        statusDisplay.textContent = '';
+
+        if (data.needsSelection) {
+            extractedContextDiv.classList.add('hidden');
+            emailChoicesDiv.classList.remove('hidden');
+            emailChoicesDiv.innerHTML = '<p>Please choose the most relevant email:</p>';
+            data.choices.forEach(choice => {
+                const button = document.createElement('button');
+                button.textContent = choice.text;
+                button.onclick = () => handleEmailChoice(choice.id, userRequest);
+                emailChoicesDiv.appendChild(button);
+            });
+        } else {
+            emailChoicesDiv.classList.add('hidden');
+            extractedContextDiv.classList.remove('hidden');
+            extractedContextDiv.textContent = data.context;
+            currentContext = data.context;
+            finalCallSection.classList.remove('hidden');
+        }
+
+    } catch (error) {
+        statusDisplay.textContent = `Error: ${error.message}`;
+    } finally {
+        searchButton.disabled = false;
+        searchButton.textContent = '🔍 Search Email for Context';
+    }
+});
+
+async function handleEmailChoice(messageId, userRequest) {
+    emailChoicesDiv.innerHTML = '<p>Extracting details...</p>';
+    try {
+        const response = await fetch('/get-email-details', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messageId, userRequest }),
+        });
+        const data = await response.json();
+        emailChoicesDiv.classList.add('hidden');
+        extractedContextDiv.classList.remove('hidden');
+        extractedContextDiv.textContent = data.context;
+        currentContext = data.context;
+        finalCallSection.classList.remove('hidden');
+    } catch (error) {
+        extractedContextDiv.textContent = "Error getting email details.";
     }
 }
 
 callButton.addEventListener('click', async () => {
-  const userName = userNameInput.value; 
-  const userRequest = userRequestInput.value;
-  const phoneNumber = phoneNumberInput.value;
-
-  if (!userName || !userRequest || !phoneNumber) {
-    statusDisplay.textContent = 'Please fill out all fields.';
-    return;
-  }
-
-  callButton.disabled = true;
-  callButton.textContent = 'Initiating...';
-  callButton.classList.add('hidden');
-  cancelButton.classList.remove('hidden');
-
-  statusDisplay.textContent = 'Sending request to server...';
-  summaryBox.textContent = 'Your call summary will appear here after the call is complete...';
-
-  try {
-    const response = await fetch('/initiate-call', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userName, userRequest, phoneNumber }),
-    });
-
-    const data = await response.json();
-
-    if (response.ok) {
-      statusDisplay.textContent = 'Call is in progress!';
-      callButton.textContent = 'Call Placed';
-      currentCallId = data.callId;
-      startPolling(currentCallId);
-    } else {
-      throw new Error(data.error || 'Failed to start call.');
+    const phoneNumber = finalPhoneNumberInput.value;
+    if (!phoneNumber) {
+        statusDisplay.textContent = "Please enter a phone number to call.";
+        return;
     }
-  } catch (error) {
-    statusDisplay.textContent = `Error: ${error.message}`;
-    resetUI();
-  }
-});
 
-cancelButton.addEventListener('click', () => {
-    resetUI();
-    summaryBox.textContent = 'Call cancelled. Ready for a new task.';
+    statusDisplay.textContent = `Starting call to ${phoneNumber}...`;
+    callButton.disabled = true;
+
+    // Here you would integrate the real call logic
+    // For now, it's simulated.
+    setTimeout(() => {
+        statusDisplay.textContent = "Call simulation finished.";
+        summaryBox.textContent = "This is where the real summary would go.";
+        resetSearchUI();
+    }, 10000);
 });
 
 
-function startPolling(callId) {
-    if (pollingInterval) {
-        clearInterval(pollingInterval);
-    }
-
-    pollingInterval = setInterval(async () => {
-        if (!currentCallId) return;
-
-        try {
-            const statusResponse = await fetch(`/get-status/${callId}`);
-            if (statusResponse.status === 200) {
-                const statusData = await statusResponse.json();
-                if (statusData.status) {
-                    statusDisplay.textContent = statusData.status;
-                }
-            }
-
-            const summaryResponse = await fetch(`/get-summary/${callId}`);
-            if (summaryResponse.status === 200) {
-                const summaryData = await summaryResponse.json();
-                summaryBox.textContent = summaryData.summary;
-                statusDisplay.textContent = 'Call finished and summary received!';
-                clearInterval(pollingInterval);
-                resetUI();
-            } else if (summaryResponse.status !== 202) {
-                 throw new Error('Failed to fetch summary.');
-            }
-
-        } catch (error) {
-            console.error('Polling error:', error);
-        }
-    }, 3000);
+function resetSearchUI() {
+    resultsContainer.classList.add('hidden');
+    finalCallSection.classList.add('hidden');
+    emailChoicesDiv.innerHTML = '';
+    extractedContextDiv.textContent = '';
+    finalPhoneNumberInput.value = '';
+    currentContext = "";
 }
+
+document.addEventListener('DOMContentLoaded', checkAuthStatus);

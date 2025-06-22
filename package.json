@@ -1,19 +1,16 @@
 {
-  "name": "nodejs",
+  "name": "vapi-gmail-agent",
   "version": "1.0.0",
-  "description": "",
+  "description": "An AI agent that can access Gmail to perform tasks.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "@types/node": "^22.13.11",
-    "body-parser": "^2.2.0",
-    "express": "^5.1.0",
+    "express": "^4.19.2",
+    "body-parser": "^1.20.2",
     "node-fetch": "^2.7.0",
-    "vapi": "^0.1.0"
+    "googleapis": "^140.0.0",
+    "express-session": "^1.18.0"
   }
 }

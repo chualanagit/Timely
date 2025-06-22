@@ -1,49 +1,66 @@
-// FILE 2: public/index.html (Corrected Font Links)
+// FILE 2: public/index.html (Manual Phone Number & Simpler UI)
 //================================================================================
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Task Agent</title>
+    <title>Your Timely Agent</title>
     <link href="style.css" rel="stylesheet" type="text/css" />
-    <link rel="preconnect" href="[https://fonts.googleapis.com](https://fonts.googleapis.com)">
-    <link rel="preconnect" href="[https://fonts.gstatic.com](https://fonts.gstatic.com)" crossorigin>
-    <link href="[https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap](https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap)" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="container">
-        <h1>AI Task Agent</h1>
-        <p>Describe the task you want the AI agent to perform on a call.</p>
+        <h1>Your Timely Agent</h1>
+        <p>Connect your email, then describe the task you want the AI to perform.</p>
 
-        <div class="input-group">
-            <label for="user-name">Your Name:</label>
-            <input type="text" id="user-name" placeholder="e.g., Cyndi Song">
+        <a href="/auth/google" class="google-btn" target="_blank">
+            <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" alt="Google logo"/>
+            Connect Gmail
+        </a>
+
+        <div id="agent-form" class="hidden">
+            <div class="input-group">
+                <label for="user-name">Your Name:</label>
+                <input type="text" id="user-name" placeholder="e.g., Cyndi Song">
+            </div>
+
+            <div class="input-group">
+                <label for="user-request">Your Request:</label>
+                <textarea id="user-request" rows="3" placeholder="e.g., Return my shirt from Banana Republic."></textarea>
+            </div>
+
+            <button id="search-button">🔍 Search Email for Context</button>
         </div>
 
-        <div class="input-group">
-            <label for="user-request">Your Request:</label>
-            <textarea id="user-request" rows="3" placeholder="e.g., Return my Bose headphones (Order ID: 123-456) because they don't charge."></textarea>
-        </div>
+        <div id="results-container" class="hidden">
+            <div class="output-container">
+                <h2>Information from Email</h2>
+                <div id="email-choices"></div>
+                <div id="extracted-context"></div>
+            </div>
 
-        <div class="input-group">
-            <label for="phone-number">Phone Number to Call (E.164 Format):</label>
-            <input type="tel" id="phone-number" placeholder="+18882804331">
+            <!-- Manual Phone Number entry is now part of the final step -->
+            <div id="final-call-section" class="hidden">
+                 <div class="input-group">
+                    <label for="phone-number-final">Phone Number to Call (E.164):</label>
+                    <input type="tel" id="phone-number-final" placeholder="+18005551234">
+                </div>
+                <button id="call-button">🚀 Confirm & Start Call</button>
+            </div>
         </div>
-
-        <button id="call-button">🚀 Create Agent & Start Call</button>
-        <button id="cancel-button" class="hidden">Cancel & Reset</button>
 
         <div id="status-display"></div>
 
         <div class="output-container">
             <h2>Call Summary</h2>
             <div id="summary-box">
-                Your call summary will appear here after the call is complete...
+                Connect your Gmail to begin...
             </div>
         </div>
     </div>
     <script src="script.js"></script>
 </body>
 </html>
-```css
