@@ -1,5 +1,5 @@
 //================================================================================
-// FILE 1: index.js (with serverUrl Fix)
+// FILE 1: index.js (with serverUrl fix)
 // This version corrects the format of the serverUrl in the Vapi API call.
 //================================================================================
 
