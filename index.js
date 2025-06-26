@@ -1,6 +1,6 @@
 //================================================================================
-// FILE 1: index.js (with Priority Sorting and Debug Logs)
-// This version sorts relevant emails to prioritize confirmations/receipts.
+// FILE 1: index.js (with Full Results Logging)
+// This version logs the complete sorted list of relevant emails for debugging.
 //================================================================================
 
 const express = require('express');
@@ -212,7 +212,7 @@ Based on these rules, is this email transactional and relevant? Respond with onl
     const relevantEmails = results.filter(email => email !== null);
 
     if (relevantEmails.length > 0) {
-        // NEW: Sort the relevant emails to prioritize certain keywords
+        // Sort the relevant emails to prioritize certain keywords
         console.log("Prioritizing relevant emails before showing final list...");
         relevantEmails.sort((a, b) => {
             const aSubject = a.text.toLowerCase();
@@ -220,12 +220,17 @@ Based on these rules, is this email transactional and relevant? Respond with onl
             const aHasPriority = CONFIG.PRIORITY_KEYWORDS.some(kw => aSubject.includes(kw));
             const bHasPriority = CONFIG.PRIORITY_KEYWORDS.some(kw => bSubject.includes(kw));
 
-            console.log(`[Sorter] A: "${a.text.substring(0, 40)}..." (Priority: ${aHasPriority}) | B: "${b.text.substring(0, 40)}..." (Priority: ${bHasPriority})`);
-
             if (aHasPriority && !bHasPriority) return -1; // a comes first
             if (!aHasPriority && bHasPriority) return 1;  // b comes first
             return 0; // maintain original order otherwise
         });
+
+        // NEW: Log the full sorted list for debugging
+        console.log("--- Final Sorted List of Relevant Emails (before slicing) ---");
+        relevantEmails.forEach((email, index) => {
+            console.log(`[${index + 1}] ${email.text}`);
+        });
+        console.log("----------------------------------------------------------");
 
         return { needsSelection: true, choices: relevantEmails.slice(0, CONFIG.MAX_CHOICES_TO_SHOW) };
     } else {
