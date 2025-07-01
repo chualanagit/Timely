@@ -13,31 +13,39 @@
     <div class="main-container">
         <div class="header">
             <h1>Your Timely Agent</h1>
-            <p>Connect your email, then describe the task you want the AI to perform.</p>
+            <p>Your personal AI agent for completing real-world tasks.</p>
         </div>
 
         <div id="auth-section">
-            <a href="/auth/google" class="google-btn" target="_blank">
+            <a href="/auth/google" class="google-btn">
                 <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" alt="Google logo"/>
-                Connect Gmail
+                Connect Google Account
             </a>
         </div>
 
+        <div id="task-choice-section" class="hidden card">
+            <h2>Step 1: Choose Your Goal</h2>
+            <div class="button-group">
+                <button id="schedule-btn">🗓️ Schedule an Appointment</button>
+                <button id="lookup-btn">🛍️ Get Help with a Purchase or Booking</button>
+            </div>
+        </div>
+
         <div id="agent-form" class="hidden card">
-            <h2>Step 1: Provide Task Details</h2>
+            <h2 id="form-header">Step 2: Provide Task Details</h2>
             <div class="input-group">
                 <label for="user-name">Your Name:</label>
                 <input type="text" id="user-name" placeholder="e.g., Cyndi Song">
             </div>
             <div class="input-group">
                 <label for="user-request">Your Request:</label>
-                <textarea id="user-request" rows="3" placeholder="e.g., Return my shirt from Banana Republic."></textarea>
+                <textarea id="user-request" rows="3" placeholder="e.g., Book a haircut for next Tuesday afternoon."></textarea>
             </div>
-            <button id="search-button">🔍 Search Email & Find Context</button>
+            <button id="prepare-agent-btn">✅ Prepare Agent</button>
         </div>
 
         <div id="results-container" class="hidden card">
-            <h2>Step 2: Confirm Information</h2>
+            <h2>Step 3: Confirm Information</h2>
             <div class="output-container">
                 <h3>Phone Number to Call</h3>
                  <div id="phone-number-entry" class="input-group">
@@ -45,7 +53,7 @@
                 </div>
             </div>
             <div class="output-container">
-                <h3>Information from Email</h3>
+                <h3>Context for the Agent</h3>
                 <div id="email-choices"></div>
                 <div id="extracted-context"></div>
                 <div id="go-back-container"></div> 
@@ -54,11 +62,11 @@
         </div>
 
         <div id="call-progress-container" class="hidden card">
-             <h2>Step 3: Call in Progress</h2>
+             <h2>Step 4: Call in Progress</h2>
              <div id="status-display"></div>
              <button id="stop-call-button" class="hidden">🛑 Stop Call</button>
         </div>
-       
+
         <div id="call-summary-container" class="hidden card">
             <h2>Call Summary</h2>
             <div id="summary-box">

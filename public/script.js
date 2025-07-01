@@ -1,33 +1,31 @@
-//================================================================================
-// FILE 4: public/script.js (with Status & Summary Restored)
-// This version restores the full polling logic for live updates.
-//================================================================================
-
 const googleBtn = document.querySelector('.google-btn');
+const taskChoiceSection = document.getElementById('task-choice-section');
+const scheduleBtn = document.getElementById('schedule-btn');
+const lookupBtn = document.getElementById('lookup-btn');
 const agentForm = document.getElementById('agent-form');
+const formHeader = document.getElementById('form-header');
 const userNameInput = document.getElementById('user-name');
 const userRequestInput = document.getElementById('user-request');
-const searchButton = document.getElementById('search-button');
-
+const prepareAgentBtn = document.getElementById('prepare-agent-btn');
 const resultsContainer = document.getElementById('results-container');
 const phoneNumberEntry = document.getElementById('phone-number-entry');
 const finalPhoneNumberInput = document.getElementById('phone-number-final'); 
-
 const emailChoicesDiv = document.getElementById('email-choices');
 const extractedContextDiv = document.getElementById('extracted-context');
 const goBackContainer = document.getElementById('go-back-container');
 const callButton = document.getElementById('call-button');
 const stopCallButton = document.getElementById('stop-call-button');
-
 const statusDisplay = document.getElementById('status-display');
 const callSummaryContainer = document.getElementById('call-summary-container');
 const summaryBox = document.getElementById('summary-box');
+const callProgressContainer = document.getElementById('call-progress-container');
 
 let currentContext = "";
 let currentEmailChoices = [];
 let currentCallId = null;
 let statusPollingInterval = null;
 let summaryPollingInterval = null;
+let currentTaskType = '';
 
 async function checkAuthStatus() {
     try {
@@ -35,16 +33,30 @@ async function checkAuthStatus() {
         const data = await response.json();
         if (data.authenticated) {
             googleBtn.classList.add('hidden');
-            agentForm.classList.remove('hidden');
-            summaryBox.textContent = 'Gmail connected! Please enter your task details.';
+            taskChoiceSection.classList.remove('hidden');
         }
     } catch (error) {
         console.error("Error checking auth status:", error);
     }
 }
 
-searchButton.addEventListener('click', async function handleSearchClick() {
-    console.log("Search button clicked.");
+scheduleBtn.addEventListener('click', () => {
+    currentTaskType = 'scheduling';
+    taskChoiceSection.classList.add('hidden');
+    formHeader.textContent = 'Step 2: Describe the Appointment';
+    userRequestInput.placeholder = 'e.g., Book a haircut for next Tuesday afternoon.';
+    agentForm.classList.remove('hidden');
+});
+
+lookupBtn.addEventListener('click', () => {
+    currentTaskType = 'lookup';
+    taskChoiceSection.classList.add('hidden');
+    formHeader.textContent = 'Step 2: Describe Your Request';
+    userRequestInput.placeholder = 'e.g., Return my shirt from Banana Republic.';
+    agentForm.classList.remove('hidden');
+});
+
+prepareAgentBtn.addEventListener('click', async function handlePrepareAgent() {
     const userRequest = userRequestInput.value;
     if (!userRequest) {
         statusDisplay.textContent = 'Please enter your request.';
@@ -52,45 +64,49 @@ searchButton.addEventListener('click', async function handleSearchClick() {
     }
 
     resetSearchUI();
-    searchButton.disabled = true;
-    searchButton.textContent = 'Searching...';
-    statusDisplay.textContent = 'Deriving company name...';
+    prepareAgentBtn.disabled = true;
+    prepareAgentBtn.textContent = 'Thinking...';
+
+    const endpoint = currentTaskType === 'scheduling' ? '/prepare-scheduling' : '/prepare-lookup';
+    statusDisplay.textContent = currentTaskType === 'scheduling' ? 'Checking your calendar...' : 'Searching your email...';
 
     try {
-        const response = await fetch('/search-email', {
+        const response = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userRequest }),
         });
 
-        statusDisplay.textContent = 'Processing search results...';
         const data = await response.json();
 
         if (!response.ok) {
-            throw new Error(data.error || 'Failed to search email.');
+            throw new Error(data.error || 'Failed to prepare agent.');
         }
 
         resultsContainer.classList.remove('hidden');
         statusDisplay.textContent = '';
-
         phoneNumberEntry.classList.remove('hidden');
 
-        if (data.needsSelection) {
-            currentEmailChoices = data.choices;
-            displayEmailChoices(data.choices, userRequest);
-        } else {
-            emailChoicesDiv.innerHTML = `<p>${data.context}</p>`;
+        if (currentTaskType === 'scheduling') {
+            extractedContextDiv.innerHTML = `<p><strong>Agent Context:</strong><br>${data.context.replace(/\n/g, '<br>')}</p>`;
             currentContext = data.context;
             callButton.classList.remove('hidden');
+        } else { // Lookup path
+            if (data.needsSelection) {
+                currentEmailChoices = data.choices;
+                displayEmailChoices(data.choices, userRequest);
+            } else {
+                emailChoicesDiv.innerHTML = `<p>${data.context}</p>`;
+                currentContext = data.context;
+                callButton.classList.remove('hidden');
+            }
         }
-
     } catch (error) {
-        console.error("Search error:", error);
+        console.error("Agent prep error:", error);
         statusDisplay.textContent = `Error: ${error.message}`;
     } finally {
-        console.log("Search process finished, button re-enabled.");
-        searchButton.disabled = false;
-        searchButton.textContent = '🔍 Search Email for Context';
+        prepareAgentBtn.disabled = false;
+        prepareAgentBtn.textContent = '✅ Prepare Agent';
     }
 });
 
@@ -117,39 +133,24 @@ async function handleEmailChoice(messageId, userRequest) {
         const data = await response.json();
         emailChoicesDiv.innerHTML = '';
 
-        // --- NEW: Table Generation ---
         const table = document.createElement('table');
         table.className = 'details-table';
         const tbody = document.createElement('tbody');
-
         for (const [key, value] of Object.entries(data.context)) {
             const row = tbody.insertRow();
-            const cellKey = row.insertCell();
-            const cellValue = row.insertCell();
-            cellKey.textContent = key;
-            cellValue.textContent = value;
+            row.insertCell().textContent = key;
+            row.insertCell().textContent = value;
         }
-
         table.appendChild(tbody);
-        extractedContextDiv.innerHTML = ''; // Clear previous content
+        extractedContextDiv.innerHTML = '';
         extractedContextDiv.appendChild(table);
-        // --- END: Table Generation ---
 
-        currentContext = Object.entries(data.context)
-                               .map(([key, value]) => `${key}: ${value}`)
-                               .join('\\n');
-
-
-        if (data.phoneNumberFromEmail) {
-            finalPhoneNumberInput.value = data.phoneNumberFromEmail;
-        } else {
-             finalPhoneNumberInput.placeholder = 'No number in email. Please enter.';
-        }
+        currentContext = Object.entries(data.context).map(([key, value]) => `${key}: ${value}`).join('\n');
+        if (data.phoneNumberFromEmail) finalPhoneNumberInput.value = data.phoneNumberFromEmail;
 
         const goBackButton = document.createElement('button');
-        goBackButton.textContent = '← Go Back & Choose Again';
+        goBackButton.textContent = '← Go Back';
         goBackButton.onclick = () => {
-            goBackContainer.innerHTML = '';
             extractedContextDiv.innerHTML = '';
             displayEmailChoices(currentEmailChoices, userRequest);
         };
@@ -175,14 +176,14 @@ callButton.addEventListener('click', async () => {
     resetCallUI();
     callButton.disabled = true;
     callButton.classList.add('hidden');
-    goBackContainer.innerHTML = ''; 
     stopCallButton.classList.remove('hidden');
+    callProgressContainer.classList.remove('hidden');
 
     try {
         const response = await fetch('/initiate-call', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userName, userRequest, phoneNumber, context }),
+            body: JSON.stringify({ userName, userRequest, phoneNumber, context, taskType: currentTaskType }),
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Failed to start call.');
@@ -190,10 +191,8 @@ callButton.addEventListener('click', async () => {
         currentCallId = data.callId;
         statusDisplay.textContent = 'Call initiated...';
         callSummaryContainer.classList.remove('hidden');
-
         statusPollingInterval = setInterval(getStatus, 3000);
         summaryPollingInterval = setInterval(getSummary, 5000);
-
     } catch (error) {
         statusDisplay.textContent = `Error: ${error.message}`;
         resetCallUI(true);
@@ -224,9 +223,7 @@ async function getStatus() {
         const response = await fetch(`/get-status/${currentCallId}`);
         if (response.status === 200) {
             const data = await response.json();
-            if (data.status) {
-                statusDisplay.textContent = data.status;
-            }
+            if (data.status) statusDisplay.textContent = data.status;
         }
     } catch (error) {
         console.error('Status polling error:', error);
@@ -239,7 +236,7 @@ async function getSummary() {
         const response = await fetch(`/get-summary/${currentCallId}`);
         if (response.status === 200) {
             const data = await response.json();
-            summaryBox.innerHTML = data.summary.replace(/\n/g, '<br>'); // Format summary
+            summaryBox.innerHTML = data.summary.replace(/\n/g, '<br>');
             resetCallUI(true);
         }
     } catch (error) {
@@ -255,7 +252,7 @@ function resetSearchUI() {
     extractedContextDiv.innerHTML = '';
     goBackContainer.innerHTML = '';
     phoneNumberEntry.classList.add('hidden');
-    if(finalPhoneNumberInput) finalPhoneNumberInput.value = '';
+    if (finalPhoneNumberInput) finalPhoneNumberInput.value = '';
     currentContext = "";
     currentEmailChoices = [];
 }
@@ -270,7 +267,7 @@ function resetCallUI(isCallFinished) {
     stopCallButton.disabled = false;
     stopCallButton.textContent = "🛑 Stop Call";
 
-    if(isCallFinished) {
+    if (isCallFinished) {
         callButton.disabled = false;
         callButton.textContent = "🚀 Confirm & Start Call";
         currentCallId = null;
