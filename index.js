@@ -11,6 +11,22 @@ const { google } = require("googleapis");
 const session = require("express-session");
 const pdf = require("pdf-parse");
 
+// Check for required environment variables
+const {
+    ELEVENLABS_API_KEY,
+    ELEVENLABS_AGENT_ID,
+    ELEVENLABS_PHONE_NUMBER_ID,
+} = process.env;
+
+if (
+    !ELEVENLABS_API_KEY ||
+    !ELEVENLABS_AGENT_ID ||
+    !ELEVENLABS_PHONE_NUMBER_ID
+) {
+    console.error("Missing required environment variables");
+    throw new Error("Missing required environment variables");
+}
+
 const CONFIG = {
     GMAIL_MAX_RESULTS: 50,
     MAX_CHOICES_TO_SHOW: 5,
@@ -36,8 +52,8 @@ app.use(session({
     cookie: { secure: 'auto' }
 }));
 
-const callSummaries = {};
-const callStatuses = {};
+// Note: ElevenLabs handles calls directly, so we don't need to track call summaries/statuses
+// in the same way as with Vapi
 
 const redirectUri = `https://4ecd835c-0377-4fd9-aed1-c2ea5f79180b-00-2a2xq55tc57yu.worf.replit.dev/auth/google/callback`;
 const oauth2Client = new google.auth.OAuth2(
@@ -361,6 +377,8 @@ async function deriveOtherPartyRole(userRequest) {
     return await callLlamaAPI(rolePrompt, CONFIG.LLAMA_ROLE_MAX_TOKENS);
 }
 
+
+
 // Add this entire block to index.js
 
 async function getCalendarSettings(authClient) {
@@ -465,70 +483,211 @@ app.post('/initiate-call', async (req, res) => {
 
     try {
         const otherPartyRole = await deriveOtherPartyRole(userRequest);
-        const payload = {
-            phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID,
-            customer: { number: phoneNumber },
-            assistant: {
-                serverUrl: `https://${req.get('host')}/call-webhook`,
-                firstMessage,
-                model: { provider: "openai", model: "gpt-4o", systemPrompt },
-                voice: { provider: "playht", voiceId: "jennifer" },
-                metadata: { userName, otherPartyRole, userSession: req.session }
-            }
+        console.log("[DEBUG] Derived other party role:", otherPartyRole);
+        console.log("[DEBUG] Calling ElevenLabs Twilio API...");
+
+        const requestBody = {
+            agent_id: ELEVENLABS_AGENT_ID,
+            agent_phone_number_id: ELEVENLABS_PHONE_NUMBER_ID,
+            to_number: phoneNumber,
+            conversation_initiation_client_data: {
+                dynamic_variables: {
+                    user_name: userName,
+                    user_id: Date.now(),
+                    other_party_role: otherPartyRole,
+                },
+                conversation_config_override: {
+                    agent: {
+                        prompt: {
+                            prompt: systemPrompt,
+                        },
+                        first_message: firstMessage,
+                    },
+                },
+            },
         };
-        const vapiResponse = await fetch('https://api.vapi.ai/call/phone', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.VAPI_PRIVATE_KEY}` },
-            body: JSON.stringify(payload)
+
+        console.log("[DEBUG] Request body:", JSON.stringify(requestBody, null, 2));
+
+        const response = await fetch(
+            "https://api.elevenlabs.io/v1/convai/twilio/outbound-call",
+            {
+                method: "POST",
+                headers: {
+                    "xi-api-key": ELEVENLABS_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify(requestBody),
+            }
+        );
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("[ERROR] ElevenLabs API error:", response.status, errorText);
+            throw new Error(`ElevenLabs API error: ${response.status} - ${errorText}`);
+        }
+
+        const result = await response.json();
+        console.log("[DEBUG] ElevenLabs API response:", JSON.stringify(result, null, 2));
+
+        res.status(200).json({
+            message: 'Call initiated successfully!',
+            callId: result.conversation_id || result.callSid,
+            success: result.success,
+            conversation_id: result.conversation_id,
+            callSid: result.callSid,
         });
-        if (!vapiResponse.ok) throw new Error(`Vapi API Error: ${await vapiResponse.text()}`);
-        const call = await vapiResponse.json();
-        res.status(200).json({ message: 'Call initiated successfully!', callId: call.id });
     } catch (error) {
         console.error("Error in /initiate-call endpoint:", error);
         res.status(500).json({ error: 'Failed to initiate call.' });
     }
 });
 
+// Note: ElevenLabs handles calls directly and doesn't use webhooks in the same way as Vapi
+// The call summary and follow-up actions would need to be handled differently
+// For now, we'll keep this endpoint for compatibility but it won't be used by ElevenLabs
 app.post('/call-webhook', async (req, res) => {
-    const { message } = req.body;
-    if (message.type !== 'end-of-call-report') {
-        if (message.type === 'status-update') callStatuses[message.call.id] = `Call status: ${message.status}...`;
-        return res.status(200).send();
-    }
-
-    const userSession = message.call.assistant.metadata.userSession;
-    if (!userSession || !userSession.tokens) {
-        console.error(`Webhook for call ${message.call.id} received, but no user session found.`);
-        return res.status(200).send();
-    }
-
-    oauth2Client.setCredentials(userSession.tokens);
-    const summaryObject = await generateActionableSummary(message.transcript || "");
-    console.log("--- Actionable Summary from AI ---", JSON.stringify(summaryObject, null, 2));
-    
-    if (summaryObject.followUp && summaryObject.nextAction?.actionType === 'create_calendar_event') {
-        console.log("Follow-up action detected: Creating calendar event.");
-        await createCalendarEvent(oauth2Client, summaryObject.nextAction);
-    }
-
-    callSummaries[message.call.id] = `**Summary:**\n${summaryObject.summary}\n\n**Result:**\n${summaryObject.result}`;
-    delete callStatuses[message.call.id];
-
+    console.log("[DEBUG] Webhook received (not used with ElevenLabs):", req.body);
     res.status(200).send();
 });
 
-app.get('/get-status/:callId', (req, res) => {
-    res.json({ status: callStatuses[req.params.callId] || null });
+app.get('/get-status/:callId', async (req, res) => {
+    const conversationId = req.params.callId;
+
+    if (!req.session.tokens) {
+        return res.status(401).json({ error: 'User not authenticated.' });
+    }
+
+    try {
+        console.log(`[DEBUG] Fetching conversation status for ID: ${conversationId}`);
+
+        const response = await fetch(
+            `https://api.elevenlabs.io/v1/convai/conversations/${conversationId}`,
+            {
+                method: "GET",
+                headers: {
+                    "xi-api-key": ELEVENLABS_API_KEY,
+                    "Content-Type": "application/json",
+                },
+            }
+        );
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("[ERROR] ElevenLabs conversation API error:", response.status, errorText);
+            throw new Error(`ElevenLabs API error: ${response.status} - ${errorText}`);
+        }
+
+        const conversationData = await response.json();
+
+        // Return status information
+        const statusData = {
+            conversation_id: conversationData.conversation_id,
+            status: conversationData.status,
+            call_duration_secs: conversationData.metadata?.call_duration_secs,
+            start_time: conversationData.metadata?.start_time_unix_secs,
+            has_audio: conversationData.has_audio,
+            has_user_audio: conversationData.has_user_audio,
+            has_response_audio: conversationData.has_response_audio
+        };
+
+        res.json(statusData);
+
+    } catch (error) {
+        console.error("Error fetching conversation status:", error);
+        res.status(500).json({ 
+            error: 'Failed to fetch conversation status',
+            details: error.message 
+        });
+    }
 });
 
-app.get('/get-summary/:callId', (req, res) => {
-    const summary = callSummaries[req.params.callId];
-    if (summary) {
-        res.json({ summary });
-        delete callSummaries[req.params.callId];
-    } else {
-        res.status(202).send();
+app.get('/get-summary/:callId', async (req, res) => {
+    const conversationId = req.params.callId;
+
+    if (!req.session.tokens) {
+        return res.status(401).json({ error: 'User not authenticated.' });
+    }
+
+    try {
+        console.log(`[DEBUG] Fetching conversation details for ID: ${conversationId}`);
+
+        const response = await fetch(
+            `https://api.elevenlabs.io/v1/convai/conversations/${conversationId}`,
+            {
+                method: "GET",
+                headers: {
+                    "xi-api-key": ELEVENLABS_API_KEY,
+                    "Content-Type": "application/json",
+                },
+            }
+        );
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("[ERROR] ElevenLabs conversation API error:", response.status, errorText);
+            throw new Error(`ElevenLabs API error: ${response.status} - ${errorText}`);
+        }
+
+        const conversationData = await response.json();
+        console.log("[DEBUG] Conversation data received:", JSON.stringify(conversationData, null, 2));
+
+        // Check if conversation is still processing
+        if (conversationData.status === 'processing' || conversationData.status === 'in-progress') {
+            return res.status(202).json({ 
+                status: 'processing', 
+                message: 'Conversation is still in progress' 
+            });
+        }
+
+        // Extract transcript and generate summary
+        if (conversationData.transcript && conversationData.transcript.length > 0) {
+            // Convert transcript array to text format
+            const transcriptText = conversationData.transcript
+                .map(entry => `${entry.role}: ${entry.message}`)
+                .join('\n');
+
+            console.log("[DEBUG] Generated transcript text:", transcriptText);
+
+            // Set credentials for Google API calls
+            oauth2Client.setCredentials(req.session.tokens);
+
+            // Generate actionable summary using existing function
+            const summaryObject = await generateActionableSummary(transcriptText);
+            console.log("--- Actionable Summary from AI ---", JSON.stringify(summaryObject, null, 2));
+
+            // Handle follow-up actions if needed
+            if (summaryObject.followUp && summaryObject.nextAction?.actionType === 'create_calendar_event') {
+                console.log("Follow-up action detected: Creating calendar event.");
+                await createCalendarEvent(oauth2Client, summaryObject.nextAction);
+            }
+
+            // Prepare response with conversation details and summary
+            const responseData = {
+                conversation_id: conversationData.conversation_id,
+                status: conversationData.status,
+                call_duration_secs: conversationData.metadata?.call_duration_secs,
+                start_time: conversationData.metadata?.start_time_unix_secs,
+                summary: `**Summary:**\n${summaryObject.summary}\n\n**Result:**\n${summaryObject.result}`,
+                followUp: summaryObject.followUp,
+                nextAction: summaryObject.nextAction
+            };
+
+            res.json(responseData);
+        } else {
+            res.status(404).json({ 
+                error: 'No transcript available for this conversation',
+                conversation_id: conversationId,
+                status: conversationData.status
+            });
+        }
+
+    } catch (error) {
+        console.error("Error fetching conversation summary:", error);
+        res.status(500).json({ 
+            error: 'Failed to fetch conversation summary',
+            details: error.message 
+        });
     }
 });
 
