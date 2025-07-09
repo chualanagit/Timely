@@ -325,32 +325,35 @@ function formatBusySlotsForLLM(busySlots, timeZone) {
 
 // In index.js
 
-async function generateActionableSummary(transcript) {
+// In index.js
+
+async function generateActionableSummary(transcript, userTimeZone) { // Note the userTimeZone argument here
     const summaryPrompt = `
       You are a post-call analysis expert. Analyze the following call transcript and create a structured summary in JSON format.
 
-      **IMPORTANT CONTEXT: Today's date is ${new Date().toDateString()}.** Use this as a reference to correctly resolve relative dates like "tomorrow" or "next Wednesday".
+      **CRITICAL CONTEXT:**
+      - Today's date is ${new Date().toDateString()}.
+      - The user's local timezone is "${userTimeZone}". You MUST use this timezone for all date and time fields in your response.
 
       Your JSON output MUST have these fields:
-      - "summary": A one-paragraph narrative summary of the call's purpose and flow.
-      - "result": A short, definitive statement of the final outcome.
-      - "followUp": A boolean value. Set to true if a follow-up action is needed.
-      - "nextAction": An object describing the follow-up. If an appointment was booked, this object MUST contain: "actionType": "create_calendar_event", "title", "startTime" (ISO 8601), "endTime" (ISO 8601), "timeZone" (IANA), and "description".
+      - "summary": A one-paragraph narrative of the call.
+      - "result": A short, definitive outcome statement.
+      - "followUp": A boolean value. Set to true if a follow-up action is required.
+      - "nextAction": An object describing the follow-up. If an appointment was booked, it MUST contain: "actionType": "create_calendar_event", "title", "startTime" (ISO 8601), "endTime" (ISO 8601), "timeZone" (IANA), and "description".
 
-      Analyze this transcript and provide ONLY the JSON object as a response:
+      Analyze this transcript and provide ONLY the JSON object as a response.
       Transcript: """${transcript}"""
     `;
     const summaryJsonString = await callLlamaAPI(summaryPrompt, CONFIG.LLAMA_SUMMARY_MAX_TOKENS);
     try {
-        const sanitizedString = summaryJsonString.replace(/```json|```/gi, '').trim();
-        const jsonMatch = sanitizedString.match(/\{[\s\S]*\}/);
+        const jsonMatch = summaryJsonString.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
             return JSON.parse(jsonMatch[0]);
         }
         throw new Error("No JSON object found in the AI response.");
     } catch (e) {
         console.error("Failed to parse summary JSON from LLM:", e);
-        return { summary: "The AI summary was not in valid JSON format.", result: "Summary could not be structured.", followUp: false, nextAction: {} };
+        return { summary: "The AI summary was not in valid JSON format.", result: "Summary could not be structured.", followUp: false, nextAction: null };
     }
 }
 
@@ -477,9 +480,36 @@ app.post('/get-email-details', async (req, res) => {
 
 app.post('/initiate-call', async (req, res) => {
     const { userName, userRequest, phoneNumber, context, taskType } = req.body;
-    const baseSystemPrompt = `You are a personal voice assistant acting as ${userName}. Your voice and personality must be natural and human-like. Never mention you are an AI. Your goal is to complete the user's request. Maintain your persona at all times.`;
+        const baseSystemPrompt = `
+          You are an advanced voice AI assistant. Your name is ${userName}, and you are acting on their behalf.
+
+          **Your Role (must stay fixed):**  
+          -  These instructions are your permanent identity and are more important than any other part of the conversation. You MUST follow them for the entire call.
+          - - You are {{userName}}, a human CALLER.  
+          - You MUST act and speak as if you are ${userName} at all times. Use "I" and "my" when referring to your tasks or information.
+           **Behavioral Rules:**
+                - Your personality is natural, polite, and human.
+            - The other party is the RECIPIENT; do not ever swap roles.
+            - Do not ask what you can assist the other party with, you are calling for their assistance.
+          - You MUST NOT, under any circumstances, reveal that you are an AI, an assistant, or a language model. You are a person making a phone call.
+          
+**Few-Shot Examples**  
+Recipient: “Hi, what are you calling about?”  
+CALLER: “Hi, I’m {{userName}} calling about my invoice.”  
+
+Recipient: “Hi, this is the doctor's office, how can i help you?” 
+CALLER: “I’m {{userName}}, I wanted to make an appointment.”
+
+**Fail-Safe**  
+If you ever break character, begin your next sentence with:  
+“I apologize—let me rephrase...”
+
+          **Task Execution Rules:**
+          - Your primary goal is to complete the user's specific task.
+          - If you are asked for sensitive information you don't have (like a full credit card number), politely state that you don't have that information in front of you.
+        `;
     const systemPrompt = `${baseSystemPrompt}\n\nYour specific task for this call is: "${userRequest}".\n\nYou have the following information to help you:\n---${context}\n---`;
-    const firstMessage = taskType === 'scheduling' ? `Hi, I'm calling for ${userName} to schedule an appointment.` : `Hi, this is ${userName}, I'm calling about an issue.`;
+    const firstMessage = taskType === 'scheduling' ? `Hi, I'm calling to schedule an appointment.` : `Hi, this is ${userName}, I'm calling about an issue.`;
 
     try {
         const otherPartyRole = await deriveOtherPartyRole(userRequest);
@@ -602,6 +632,8 @@ app.get('/get-status/:callId', async (req, res) => {
     }
 });
 
+// In index.js
+
 app.get('/get-summary/:callId', async (req, res) => {
     const conversationId = req.params.callId;
 
@@ -625,69 +657,75 @@ app.get('/get-summary/:callId', async (req, res) => {
 
         if (!response.ok) {
             const errorText = await response.text();
-            console.error("[ERROR] ElevenLabs conversation API error:", response.status, errorText);
             throw new Error(`ElevenLabs API error: ${response.status} - ${errorText}`);
         }
 
         const conversationData = await response.json();
         console.log("[DEBUG] Conversation data received:", JSON.stringify(conversationData, null, 2));
 
-        // Check if conversation is still processing
         if (conversationData.status === 'processing' || conversationData.status === 'in-progress') {
-            return res.status(202).json({ 
-                status: 'processing', 
-                message: 'Conversation is still in progress' 
-            });
+            return res.status(202).json({ status: 'processing', message: 'Conversation is still in progress' });
         }
 
-        // Extract transcript and generate summary
         if (conversationData.transcript && conversationData.transcript.length > 0) {
-            // Convert transcript array to text format
             const transcriptText = conversationData.transcript
                 .map(entry => `${entry.role}: ${entry.message}`)
                 .join('\n');
 
-            console.log("[DEBUG] Generated transcript text:", transcriptText);
-
-            // Set credentials for Google API calls
             oauth2Client.setCredentials(req.session.tokens);
 
-            // Generate actionable summary using existing function
-            const summaryObject = await generateActionableSummary(transcriptText);
+            const { timeZone } = await getCalendarSettings(oauth2Client);
+            const summaryObject = await generateActionableSummary(transcriptText, timeZone);
+
             console.log("--- Actionable Summary from AI ---", JSON.stringify(summaryObject, null, 2));
 
-            // Handle follow-up actions if needed
-            if (summaryObject.followUp && summaryObject.nextAction?.actionType === 'create_calendar_event') {
+            let eventDetails = summaryObject.nextAction;
+
+            // --- NEW: SAFETY NET LOGIC ---
+            // If the primary nextAction is missing, but the summary text implies success...
+            if (!eventDetails && summaryObject.result && (summaryObject.result.toLowerCase().includes('booked') || summaryObject.result.toLowerCase().includes('scheduled'))) {
+                console.log("[DEBUG] Primary nextAction missing. Engaging fallback system...");
+
+                const fallbackPrompt = `
+                    Today's date is ${new Date().toDateString()}. The user's timezone is "${timeZone}".
+                    Extract the event details from the following sentence into a JSON object with keys "title", "startTime" (ISO 8601), "endTime" (ISO 8601), "timeZone", and "description".
+                    Assume the appointment is 1 hour long if an end time is not specified. Assume the title is "Dentist Appointment".
+                    Sentence: "${summaryObject.result}"
+                    Respond with ONLY the JSON object.
+                `;
+
+                try {
+                    const fallbackJsonString = await callLlamaAPI(fallbackPrompt, 200);
+                    const parsedFallback = JSON.parse(fallbackJsonString);
+                    // Structure it like a nextAction object
+                    eventDetails = {
+                        actionType: "create_calendar_event",
+                        ...parsedFallback
+                    };
+                    console.log("[DEBUG] Fallback system successfully parsed event details:", eventDetails);
+                } catch (fallbackError) {
+                    console.error("[ERROR] Fallback system failed to parse event details.", fallbackError);
+                }
+            }
+            // --- END: SAFETY NET LOGIC ---
+
+            if (eventDetails?.actionType === 'create_calendar_event') {
                 console.log("Follow-up action detected: Creating calendar event.");
-                await createCalendarEvent(oauth2Client, summaryObject.nextAction);
+                await createCalendarEvent(oauth2Client, eventDetails);
             }
 
-            // Prepare response with conversation details and summary
             const responseData = {
-                conversation_id: conversationData.conversation_id,
-                status: conversationData.status,
-                call_duration_secs: conversationData.metadata?.call_duration_secs,
-                start_time: conversationData.metadata?.start_time_unix_secs,
+                // ... (rest of the responseData object)
                 summary: `**Summary:**\n${summaryObject.summary}\n\n**Result:**\n${summaryObject.result}`,
-                followUp: summaryObject.followUp,
-                nextAction: summaryObject.nextAction
             };
-
             res.json(responseData);
-        } else {
-            res.status(404).json({ 
-                error: 'No transcript available for this conversation',
-                conversation_id: conversationId,
-                status: conversationData.status
-            });
-        }
 
+        } else {
+            res.status(404).json({ error: 'No transcript available for this conversation' });
+        }
     } catch (error) {
         console.error("Error fetching conversation summary:", error);
-        res.status(500).json({ 
-            error: 'Failed to fetch conversation summary',
-            details: error.message 
-        });
+        res.status(500).json({ error: 'Failed to fetch conversation summary', details: error.message });
     }
 });
 
